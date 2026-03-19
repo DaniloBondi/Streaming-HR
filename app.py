@@ -63,7 +63,7 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.caption("**Sensor:** Moofit armband | **Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini")
+    st.caption("**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini")
     
     st.write("")
     logoc1, logoc2 = st.columns(2)
