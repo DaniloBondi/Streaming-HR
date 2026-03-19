@@ -63,12 +63,16 @@ Sia il sensore che la metodica di acquisizione dati non permettono di utilizzare
 
 ---
 
-## Sicurezza
+## Sicurezza!!!
 
 **Chiavi API:** i file secrets.toml o i file .env che contengono le chiavi API rimangono privati
+
 **Data leakage:** Eventuali database locali non finiscono online
+
 **Data sharing:** I dati di sessione non vengono resi disponibili ad eventuali altri utenti connessi contemporaneamente
+
 **RAM:** I dati restano nella RAM solo finché l'utente tiene aperta la pagina, dopodichè i dati spariscono per sempre dal server di Streamlit
+
 **Informativa:** è presente nella sidebar laterale
 
 ---
