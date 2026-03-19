@@ -45,7 +45,7 @@ L'app è sviluppata in **Python** e richiede le seguenti librerie (incluse in `r
 ## 📖 Come iniziare
 
 1. **Configurazione Pulsoid**:
-   - Assicurati che il tuo Moofit sia collegato all'app Pulsoid sul telefono.
+   - Assicurati che il tuo sensore sia collegato correttamente tramite Bluetooth all'app Pulsoid sullo smartphone
    - Ottieni il tuo **Access Token** dal sito [Pulsoid.net](https://pulsoid.net).
 2. **Setup della web App**:
    - Inserisci il token nella barra a sinistra e premi Invio
