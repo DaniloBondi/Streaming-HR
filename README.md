@@ -47,9 +47,8 @@ L'app è sviluppata in **Python** e richiede le seguenti librerie (incluse in `r
 1. **Configurazione Pulsoid**:
    - Assicurati che il tuo Moofit sia collegato all'app Pulsoid sul telefono.
    - Ottieni il tuo **Access Token** dal sito [Pulsoid.net](https://pulsoid.net).
-2. **Setup dell'App**:
-   - Inserisci il token nel file `app.py` (Riga 12, sostituire il token tra virgolette)
-   - Carica i file su GitHub e collega il repository a **Streamlit Cloud**.
+2. **Setup della web App**:
+   - Inserisci il token nella barra a sinistra e premi Invio
 3. **Utilizzo**:
    - Clicca **START** per iniziare la registrazione.
    - Dopo 30 secondi apparirà il valore RMSSD live.
