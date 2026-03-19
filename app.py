@@ -11,7 +11,7 @@ import os
 # --- CONFIGURAZIONE ---
 PULSOID_TOKEN = "6f519fde-0ec2-4bc1-a108-8812f6f0c102"
 
-st.set_page_config(page_title="Moofit HRV Monitor", layout="wide")
+st.set_page_config(page_title="Monitoraggio live FC", layout="wide")
 
 # Refresh automatico ogni 500ms
 st_autorefresh(interval=500, key="hr_update")
@@ -61,11 +61,9 @@ with st.sidebar:
     st.markdown("---")
     st.caption("**Sensor:** Moofit armband | **Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini")
     
-    # --- LOGHI E CREATOR NELLA SIDEBAR ---
     st.write("")
     logoc1, logoc2 = st.columns(2)
     
-    # Utilizzo di width al posto di height per maggiore compatibilità
     try:
         with logoc1:
             if os.path.exists("logo UDA.png"):
@@ -82,8 +80,8 @@ with st.sidebar:
     
     st.caption("**Creator:** Danilo Bondi")
 
-# --- DASHBOARD ---
-st.title("📊❤️ Monitoraggio HR e HRV")
+# DASHBOARD
+st.title("📊❤️ Monitoraggio live frequenza cardiaca e calcolo HRV")
 
 bpm = get_bpm()
 current_ts = datetime.now().strftime("%H:%M:%S")
@@ -94,7 +92,7 @@ if bpm:
     rr_ms = 60000 / bpm
     
     if st.session_state.running:
-        # --- MODALITÀ LIVE ---
+        # LIVE SESSION
         col_val.metric("Heart Rate (Live)", f"{bpm} BPM")
         
         if st.session_state.last_timestamp != current_ts:
@@ -112,7 +110,7 @@ if bpm:
             col_hrv.info(f"⏳ Calibrazione HRV: {30 - n_punti}s...")
             
     else:
-        # --- MODALITÀ STOP (REPORT FINALE) ---
+        # STOP & REPORT
         if not st.session_state.history.empty:
             # Calcolo medie globali
             avg_bpm_total = st.session_state.history['BPM'].mean()
@@ -133,7 +131,7 @@ if bpm:
 else:
     st.error("⚠️ Segnale assente")
 
-# --- GRAFICO INTERATTIVO ---
+# GRAFICO INTERATTIVO
 if not st.session_state.history.empty:
     data_subset = st.session_state.history.tail(window_size)
     
