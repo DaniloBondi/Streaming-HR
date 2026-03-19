@@ -12,8 +12,9 @@ import os
 st.set_page_config(page_title="Monitoraggio FC / HR Monitor", layout="wide")
 
 # --- DIZIONARIO TRADUZIONI ---
+# Ho rinominato le chiavi per abbinarle ai nuovi pulsanti compatti
 LANGUAGES = {
-    "Italiano": {
+    "🇮🇹 ITA": {
         "main_title": "📊❤️ Monitoraggio live frequenza cardiaca e calcolo HRV",
         "token_label": "🔑 Token Pulsoid",
         "token_help": "Inserisci qui il tuo Token generato da Pulsoid.",
@@ -40,8 +41,8 @@ LANGUAGES = {
         "creator": "**Creator:** Danilo Bondi",
         "sec": "secondi"
     },
-    "English": {
-        "main_title": "📊❤️ Live Heart Rate Monitoring and HRV Calculation",
+    "🇬🇧 ENG": {
+        "main_title": "📊❤️ Live heart rate monitoring and HRV calculation",
         "token_label": "🔑 Pulsoid Token",
         "token_help": "Enter your Pulsoid generated Token here.",
         "btn_start": "▶️ START",
@@ -96,9 +97,10 @@ def get_bpm(token):
 
 # --- SIDEBAR COMPATTA ---
 with st.sidebar:
-    # 1. Scelta della lingua
-    lang_choice = st.selectbox("🌐 Lingua / Language", ["Italiano", "English"])
-    texts = LANGUAGES[lang_choice] # Assegna il dizionario corretto in base alla scelta
+    # MODIFICA: Radio button orizzontale compatto invece della selectbox. 
+    # label_visibility="collapsed" nasconde il titolo del widget per risparmiare ulteriore spazio.
+    lang_choice = st.radio("Lingua", ["🇮🇹 ITA", "🇬🇧 ENG"], horizontal=True, label_visibility="collapsed")
+    texts = LANGUAGES[lang_choice] 
 
     st.markdown("---")
 
@@ -234,4 +236,3 @@ if not st.session_state.history.empty:
     )
 
     st.altair_chart(line + trend, use_container_width=True)
-    
