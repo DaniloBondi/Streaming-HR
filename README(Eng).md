@@ -38,7 +38,7 @@ The app is developed in **Python** and requires the following libraries:
 
 ## 📖 Getting Started
 
-1. **Pulsoid Configuration**: Ensure your sensor is correclty linked via bluetooth to the Pulsoid app and obtain your **Access Token**.
+1. **Pulsoid Configuration**: Ensure your sensor is correctly linked via bluetooth to the Pulsoid app and obtain your **Access Token** from the website [Pulsoid.net](https://pulsoid.net).
 2. **App Setup**: Insert the token in the field on the left and press Enter
 3. **Usage**: Click **START** to record. Live RMSSD appears after 30s. Click **STOP** to summarize and download.
 
