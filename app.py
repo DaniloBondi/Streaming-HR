@@ -45,7 +45,7 @@ with st.sidebar:
     user_token = st.text_input("🔑 Token Pulsoid", type="password", help="Inserisci qui il tuo Token generato da Pulsoid.")
 
     c1, c2 = st.columns(2)
-    # NUOVO: Il pulsante START è disabilitato se manca il token
+    
     if c1.button("▶️ START", use_container_width=True, type="primary", disabled=not user_token):
         st.session_state.running = True
     if c2.button("⏹️ STOP", use_container_width=True):
@@ -83,6 +83,17 @@ with st.sidebar:
         st.sidebar.error(f"Errore caricamento loghi: {e}")
     
     st.caption("**Creator:** Danilo Bondi")
+
+    st.write("") 
+    with st.expander("🛡️ Informativa Privacy e Dati"):
+        st.markdown("""
+        <small>
+        **Trasparenza Dati:**
+        - **Nessun salvataggio:** I dati restano solo nella RAM temporanea della sessione.
+        - **Cancellazione:** Alla chiusura del browser, i dati vengono eliminati.
+        - **Sicurezza:** Il token Pulsoid inserito non viene mai archiviato.
+        </small>
+        """, unsafe_allow_html=True)
 
 # DASHBOARD
 st.title("📊❤️ Monitoraggio live frequenza cardiaca e calcolo HRV")
