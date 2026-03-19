@@ -8,9 +8,6 @@ import pytz
 import altair as alt
 import os
 
-# --- CONFIGURAZIONE ---
-PULSOID_TOKEN = "6f519fde-0ec2-4bc1-a108-8812f6f0c102"
-
 st.set_page_config(page_title="Monitoraggio live FC", layout="wide")
 
 # Refresh automatico ogni 500ms
@@ -24,9 +21,12 @@ if 'running' not in st.session_state:
 if 'last_timestamp' not in st.session_state:
     st.session_state.last_timestamp = ""
 
-def get_bpm():
+# --- FUNZIONE API MODIFICATA ---
+def get_bpm(token):
+    if not token:
+        return None
     url = "https://dev.pulsoid.net/api/v1/data/heart_rate/latest"
-    headers = {"Authorization": f"Bearer {PULSOID_TOKEN}"}
+    headers = {"Authorization": f"Bearer {token}"}
     try:
         r = requests.get(url, headers=headers, timeout=1)
         if r.status_code == 200:
@@ -41,8 +41,12 @@ with st.sidebar:
     now_italy = datetime.now(italy_tz)
     st.markdown(f"### 🕐 {now_italy.strftime('%H:%M:%S')} | {now_italy.strftime('%d/%m/%Y')}")
 
+    # NUOVO: Campo di testo per il Token dell'utente
+    user_token = st.text_input("🔑 Token Pulsoid", type="password", help="Inserisci qui il tuo Token generato da Pulsoid.")
+
     c1, c2 = st.columns(2)
-    if c1.button("▶️ START", use_container_width=True, type="primary"):
+    # NUOVO: Il pulsante START è disabilitato se manca il token
+    if c1.button("▶️ START", use_container_width=True, type="primary", disabled=not user_token):
         st.session_state.running = True
     if c2.button("⏹️ STOP", use_container_width=True):
         st.session_state.running = False
@@ -83,7 +87,13 @@ with st.sidebar:
 # DASHBOARD
 st.title("📊❤️ Monitoraggio live frequenza cardiaca e calcolo HRV")
 
-bpm = get_bpm()
+# Controllo iniziale: chiedo all'utente di inserire il token
+if not user_token:
+    st.info("👈 Inserisci il tuo Token Pulsoid nella barra laterale per avviare il monitoraggio.")
+    bpm = None
+else:
+    bpm = get_bpm(user_token)
+
 current_ts = datetime.now().strftime("%H:%M:%S")
 
 col_val, col_hrv = st.columns(2)
@@ -112,10 +122,7 @@ if bpm:
     else:
         # STOP & REPORT
         if not st.session_state.history.empty:
-            # Calcolo medie globali
             avg_bpm_total = st.session_state.history['BPM'].mean()
-            
-            # Calcolo RMSSD globale su tutta la registrazione
             all_rr = st.session_state.history['RR_ms'].values
             if len(all_rr) >= 2:
                 rmssd_total = np.sqrt(np.mean(np.square(np.diff(all_rr))))
@@ -128,8 +135,9 @@ if bpm:
         else:
             col_val.metric("Heart Rate", f"{bpm} BPM")
             col_hrv.warning("In pausa - Inizia una registrazione")
-else:
-    st.error("⚠️ Segnale assente")
+elif user_token:
+    # Se c'è il token ma non arrivano i BPM, significa che il segnale è assente o il token è errato
+    st.error("⚠️ Segnale assente o Token non valido. Controlla il collegamento con l'app Pulsoid.")
 
 # GRAFICO INTERATTIVO
 if not st.session_state.history.empty:
