@@ -21,7 +21,7 @@ if 'running' not in st.session_state:
 if 'last_timestamp' not in st.session_state:
     st.session_state.last_timestamp = ""
 
-# --- FUNZIONE API MODIFICATA ---
+# --- FUNZIONE API ---
 def get_bpm(token):
     if not token:
         return None
@@ -88,10 +88,9 @@ with st.sidebar:
     with st.expander("🛡️ Informativa Privacy e Dati"):
         st.markdown("""
         <small>
-        **Trasparenza Dati:**
-        - **Nessun salvataggio:** I dati restano solo nella RAM temporanea della sessione.
-        - **Cancellazione:** Alla chiusura del browser, i dati vengono eliminati.
-        - **Sicurezza:** Il token Pulsoid inserito non viene mai archiviato.
+        Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.
+        Cancellazione: alla chiusura del browser, i dati vengono eliminati.
+        Sicurezza: il token Pulsoid inserito non viene mai archiviato.
         </small>
         """, unsafe_allow_html=True)
 
