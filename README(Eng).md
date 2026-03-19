@@ -51,6 +51,20 @@ Neither the sensor nor the data acquisition method allow these values to be used
 
 ---
 
+## Security!!!
+
+**API keys:** secrets.toml files or .env files containing API keys remain private
+
+**Data leakage:** Any local databases do not end up online
+
+**Data sharing:** Session data is not made available to other users who may be connected at the same time
+
+**RAM:** Data remains in RAM only as long as the user keeps the page open; after that, the data is permanently deleted from the Streamlit server
+
+**Privacy Policy:** Available in the sidebar
+
+---
+
 ## 🎓 Credits
 **Developed by:** Danilo Bondi
 **Release Date:** March 16, 2026
