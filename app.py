@@ -1,18 +1,3 @@
-Ottima scelta. Inserire le lingue in questo modo rende il tuo codice molto più professionale e facile da mantenere nel tempo, senza rallentare l'applicazione con traduttori automatici lenti.
-
-Ho riscritto l'intero file. Ecco cosa ho fatto nello specifico:
-
-    Ho creato un dizionario LANGUAGES in alto con tutte le frasi (italiano e inglese).
-
-    Ho inserito un selettore a tendina in cima alla barra laterale per far scegliere la lingua.
-
-    Ho sostituito tutto il testo "fisso" nel codice con i richiami al dizionario (texts["chiave"]).
-
-Nota: Il comando st.set_page_config deve obbligatoriamente essere la primissima istruzione Streamlit, prima ancora che l'utente possa scegliere la lingua. Per questo motivo, ho impostato il titolo della scheda del browser in formato bilingue.
-
-Ecco il tuo nuovo app.py completo da copiare e incollare:
-Python
-
 import streamlit as st
 import requests
 import pandas as pd
