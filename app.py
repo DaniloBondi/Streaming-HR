@@ -15,14 +15,16 @@ LANGUAGES = {
         "main_title": "📊❤️ Monitoraggio live frequenza cardiaca",
         "token_label": "🔑 Token Pulsoid",
         "token_help": "Inserisci qui il tuo Token generato da Pulsoid.",
-        "btn_start": "▶️ START",
-        "btn_stop": "⏹️ STOP",
-        "btn_test_start": "🫁 INIZIO TEST",
-        "btn_test_end": "🫁 FINE TEST",
-        "test_title": "Test Respiro Profondo",
+        "btn_start": "▶️ START REC",
+        "btn_stop": "⏹️ STOP REC",
+        "btn_test_start": "🟢 INIZIO TEST",
+        "btn_test_end": "🔴 FINE TEST",
+        "test_deep_breath": "Respiro Profondo",
+        "test_valsalva": "Valsalva",
+        "test_tilt": "Tilt Test",
         "window_slider": "Finestra temporale (sec)",
         "btn_csv": "📥 CSV",
-        "btn_reset": "🗑 Reset",
+        "btn_reset": "🗑 Reset Dati",
         "privacy_title": "🛡️ Informativa Privacy e Dati",
         "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: alla chiusura del browser, i dati vengono eliminati.<br>Sicurezza: il token Pulsoid inserito non viene mai archiviato.",
         "info_token": "👈 Inserisci il tuo Token Pulsoid nella barra laterale per avviare il monitoraggio.",
@@ -43,21 +45,27 @@ LANGUAGES = {
         "fc_min": "FC Min",
         "fc_diff": "FCmax - FCmin",
         "fc_ratio": "FCmax / FCmin",
-        "start_recording": "⚠️ Avvia prima la registrazione con START",
-        "test_no_data": "Nessun dato del test disponibile"
+        "tilt_ratio": "Rapporto 30:15",
+        "tilt_15": "FC a 15s",
+        "tilt_30": "FC a 30s",
+        "start_recording": "⚠️ Avvia prima la registrazione generale con START REC",
+        "test_no_data": "Nessun dato del test disponibile",
+        "tilt_wait": "⏳ Attendi almeno 30 secondi per il risultato 30:15"
     },
     "🇬🇧 ENG": {
         "main_title": "📊❤️ Live heart rate monitoring",
         "token_label": "🔑 Pulsoid Token",
         "token_help": "Enter your Pulsoid generated Token here.",
-        "btn_start": "▶️ START",
-        "btn_stop": "⏹️ STOP",
-        "btn_test_start": "🫁 START TEST",
-        "btn_test_end": "🫁 END TEST",
-        "test_title": "Deep Breathing Test",
+        "btn_start": "▶️ START REC",
+        "btn_stop": "⏹️ STOP REC",
+        "btn_test_start": "🟢 START TEST",
+        "btn_test_end": "🔴 END TEST",
+        "test_deep_breath": "Deep Breathing",
+        "test_valsalva": "Valsalva",
+        "test_tilt": "Tilt Test",
         "window_slider": "Time window (sec)",
         "btn_csv": "📥 CSV",
-        "btn_reset": "🗑 Reset",
+        "btn_reset": "🗑 Reset Data",
         "privacy_title": "🛡️ Privacy and Data Policy",
         "privacy_text": "No storage: data remains only in temporary RAM during the session.<br>Deletion: closing the browser deletes the data.<br>Security: the entered Pulsoid token is never stored.",
         "info_token": "👈 Insert your Pulsoid Token in the sidebar to start monitoring.",
@@ -78,25 +86,32 @@ LANGUAGES = {
         "fc_min": "HR Min",
         "fc_diff": "HRmax - HRmin",
         "fc_ratio": "HRmax / HRmin",
-        "start_recording": "⚠️ Start recording with START first",
-        "test_no_data": "No test data available"
+        "tilt_ratio": "30:15 Ratio",
+        "tilt_15": "HR at 15s",
+        "tilt_30": "HR at 30s",
+        "start_recording": "⚠️ Start general recording with START REC first",
+        "test_no_data": "No test data available",
+        "tilt_wait": "⏳ Wait at least 30 seconds for the 30:15 result"
     }
 }
 
 st_autorefresh(interval=500, key="hr_update")
 
+# --- INIZIALIZZAZIONE SESSION STATE ---
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Secondi', 'BPM'])
 if 'running' not in st.session_state:
     st.session_state.running = False
 if 'last_timestamp' not in st.session_state:
     st.session_state.last_timestamp = ""
-if 'test_running' not in st.session_state:
-    st.session_state.test_running = False
+
+# Stati per i test clinici
+if 'active_test' not in st.session_state:
+    st.session_state.active_test = None # Può essere "deep_breath", "valsalva", o "tilt"
 if 'test_data' not in st.session_state:
-    st.session_state.test_data = pd.DataFrame(columns=['Secondi', 'BPM'])
+    st.session_state.test_data = pd.DataFrame(columns=['Test_Sec', 'BPM'])
 if 'test_results' not in st.session_state:
-    st.session_state.test_results = None
+    st.session_state.test_results = {}
 
 def get_bpm(token):
     if not token:
@@ -111,6 +126,7 @@ def get_bpm(token):
         return None
     return None
 
+# --- SIDEBAR ---
 with st.sidebar:
     lang_choice = st.radio("Lingua", ["🇮🇹 ITA", "🇬🇧 ENG"], horizontal=True, label_visibility="collapsed")
     texts = LANGUAGES[lang_choice] 
@@ -129,8 +145,7 @@ with st.sidebar:
         st.session_state.running = True
     if c2.button(texts["btn_stop"], use_container_width=True):
         st.session_state.running = False
-        if st.session_state.test_running:
-            st.session_state.test_running = False
+        st.session_state.active_test = None # Ferma anche eventuali test in corso
 
     window_size = st.slider(texts["window_slider"], 10, 300, 60)
 
@@ -141,9 +156,9 @@ with st.sidebar:
             st.session_state.history = pd.DataFrame(columns=['Secondi', 'BPM'])
             st.session_state.last_timestamp = ""
             st.session_state.running = False
-            st.session_state.test_running = False
-            st.session_state.test_data = pd.DataFrame(columns=['Secondi', 'BPM'])
-            st.session_state.test_results = None
+            st.session_state.active_test = None
+            st.session_state.test_data = pd.DataFrame(columns=['Test_Sec', 'BPM'])
+            st.session_state.test_results = {}
             st.rerun()
 
     st.markdown("---")
@@ -160,7 +175,7 @@ with st.sidebar:
             if os.path.exists("Logo UnivAq.png"):
                 st.image("Logo UnivAq.png", width=100)
     except Exception as e:
-        st.sidebar.error(f"Errore caricamento loghi: {e}")
+        pass
     
     st.caption(texts["creator"])
 
@@ -172,10 +187,9 @@ with st.sidebar:
         </small>
         """, unsafe_allow_html=True)
 
-# DASHBOARD
+# --- DASHBOARD PRINCIPALE ---
 st.title(texts["main_title"])
 
-# Controllo iniziale: chiedo all'utente di inserire il token
 if not user_token:
     st.info(texts["info_token"])
     bpm = None
@@ -188,7 +202,6 @@ col_val, col_avg = st.columns(2)
 
 if bpm:
     if st.session_state.running:
-        # LIVE SESSION
         col_val.metric(texts["hr_live"], f"{bpm} BPM")
         
         if st.session_state.last_timestamp != current_ts:
@@ -197,19 +210,17 @@ if bpm:
             st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
             st.session_state.last_timestamp = current_ts
             
-            # Se il test è in corso, aggiungi anche ai dati del test
-            if st.session_state.test_running:
+            # Se c'è un test in corso, registra i dati nel dataframe separato del test
+            if st.session_state.active_test is not None:
                 test_sec = len(st.session_state.test_data)
-                test_row = pd.DataFrame([{'Secondi': test_sec, 'BPM': bpm}])
+                test_row = pd.DataFrame([{'Test_Sec': test_sec, 'BPM': bpm}])
                 st.session_state.test_data = pd.concat([st.session_state.test_data, test_row], ignore_index=True)
 
-        # Mostra media della sessione
         if not st.session_state.history.empty:
             avg_bpm_session = st.session_state.history['BPM'].mean()
             col_avg.metric(texts["avg_bpm"], f"{avg_bpm_session:.1f} BPM")
             
     else:
-        # STOP & REPORT
         if not st.session_state.history.empty:
             avg_bpm_total = st.session_state.history['BPM'].mean()
             col_val.metric(texts["avg_bpm"], f"{avg_bpm_total:.1f} BPM")
@@ -218,69 +229,112 @@ if bpm:
             col_val.metric(texts["hr_paused"], f"{bpm} BPM")
             col_avg.warning(texts["paused_msg"])
 elif user_token:
-    # Se c'è il token ma non arrivano i BPM
     st.error(texts["error_signal"])
 
-# SEZIONE TEST RESPIRO PROFONDO
+# --- SEZIONE TEST CLINICI ---
 st.markdown("---")
-st.subheader(f"🫁 {texts['test_title']}")
+st.subheader("🩺 Clinical Tests")
 
-test_col1, test_col2 = st.columns(2)
+# Uso i Tab per separare i tre test
+tab_db, tab_val, tab_tilt = st.tabs([f"🫁 {texts['test_deep_breath']}", f"😤 {texts['test_valsalva']}", f"🧍 {texts['test_tilt']}"])
 
-# Bottone INIZIO TEST
-if test_col1.button(
-    texts["btn_test_start"], 
-    key="start_test_button",
-    use_container_width=True, 
-    type="primary", 
-    disabled=not st.session_state.running
-):
-    if st.session_state.running:
-        st.session_state.test_running = True
-        st.session_state.test_data = pd.DataFrame(columns=['Secondi', 'BPM'])
-        st.session_state.test_results = None
+def render_test_ui(test_id, tab_texts):
+    """Funzione helper per renderizzare i bottoni e i risultati per ogni test"""
+    c1, c2 = st.columns(2)
+    
+    # Bottone INIZIO
+    if c1.button(texts["btn_test_start"], key=f"start_{test_id}", use_container_width=True, disabled=not st.session_state.running):
+        st.session_state.active_test = test_id
+        st.session_state.test_data = pd.DataFrame(columns=['Test_Sec', 'BPM']) # Reset dati
+        st.session_state.test_results[test_id] = None # Reset risultati precedenti
         st.rerun()
 
-# Bottone FINE TEST  
-if test_col2.button(
-    texts["btn_test_end"],
-    key="end_test_button", 
-    use_container_width=True,
-    disabled=not st.session_state.test_running
-):
-    if st.session_state.test_running:
-        st.session_state.test_running = False
+    # Bottone FINE
+    if c2.button(texts["btn_test_end"], key=f"end_{test_id}", use_container_width=True, disabled=(st.session_state.active_test != test_id)):
+        st.session_state.active_test = None
         
-        # Calcola i risultati del test
-        if not st.session_state.test_data.empty and len(st.session_state.test_data) > 0:
-            fc_max = st.session_state.test_data['BPM'].max()
-            fc_min = st.session_state.test_data['BPM'].min()
-            fc_diff = fc_max - fc_min
-            fc_ratio = fc_max / fc_min if fc_min > 0 else 0
+        # Calcolo risultati alla fine del test
+        if not st.session_state.test_data.empty:
+            df_test = st.session_state.test_data
             
-            st.session_state.test_results = {
-                'fc_max': fc_max,
-                'fc_min': fc_min,
-                'fc_diff': fc_diff,
-                'fc_ratio': fc_ratio
-            }
+            if test_id == "deep_breath":
+                fc_max = df_test['BPM'].max()
+                fc_min = df_test['BPM'].min()
+                st.session_state.test_results[test_id] = {
+                    'fc_max': fc_max,
+                    'fc_min': fc_min,
+                    'fc_diff': fc_max - fc_min,
+                    'fc_ratio': fc_max / fc_min if fc_min > 0 else 0
+                }
+            
+            elif test_id == "valsalva":
+                fc_max = df_test['BPM'].max()
+                fc_min = df_test['BPM'].min()
+                st.session_state.test_results[test_id] = {
+                    'fc_max': fc_max,
+                    'fc_min': fc_min,
+                    'fc_ratio': fc_max / fc_min if fc_min > 0 else 0
+                }
+                
+            elif test_id == "tilt":
+                # Cerca i valori a 15 e 30 secondi. Usa .iloc per evitare errori se mancano secondi esatti
+                bpm_15 = df_test[df_test['Test_Sec'] == 15]['BPM'].values
+                bpm_30 = df_test[df_test['Test_Sec'] == 30]['BPM'].values
+                
+                # Fallback: prendi il valore più vicino se esattamente 15 o 30 non esiste
+                v_15 = bpm_15[0] if len(bpm_15) > 0 else (df_test.iloc[15]['BPM'] if len(df_test) > 15 else None)
+                v_30 = bpm_30[0] if len(bpm_30) > 0 else (df_test.iloc[30]['BPM'] if len(df_test) > 30 else None)
+                
+                st.session_state.test_results[test_id] = {
+                    'tilt_15': v_15,
+                    'tilt_30': v_30,
+                    'tilt_ratio': (v_30 / v_15) if (v_15 and v_30 and v_15 > 0) else None
+                }
         st.rerun()
-        
-# Mostra stato del test
-if st.session_state.test_running:
-    st.info(f"{texts['test_running']} {len(st.session_state.test_data)} {texts['sec']}")
-elif st.session_state.test_results:
-    st.success(texts['test_completed'])
-    
-    # Mostra i risultati in 4 colonne
-    res_col1, res_col2, res_col3, res_col4 = st.columns(4)
-    
-    res_col1.metric(texts["fc_max"], f"{st.session_state.test_results['fc_max']:.0f} BPM")
-    res_col2.metric(texts["fc_min"], f"{st.session_state.test_results['fc_min']:.0f} BPM")
-    res_col3.metric(texts["fc_diff"], f"{st.session_state.test_results['fc_diff']:.0f} BPM")
-    res_col4.metric(texts["fc_ratio"], f"{st.session_state.test_results['fc_ratio']:.2f}")
 
-# GRAFICO INTERATTIVO
+    # Feedback visivo
+    if not st.session_state.running:
+        st.warning(texts["start_recording"])
+    elif st.session_state.active_test == test_id:
+        st.info(f"{texts['test_running']} {len(st.session_state.test_data)} {texts['sec']}")
+    elif st.session_state.test_results.get(test_id):
+        st.success(texts['test_completed'])
+        return True # Segnala che ci sono risultati da mostrare
+    return False
+
+# TAB 1: Deep Breathing
+with tab_db:
+    if render_test_ui("deep_breath", texts):
+        res = st.session_state.test_results["deep_breath"]
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric(texts["fc_max"], f"{res['fc_max']:.0f}")
+        r2.metric(texts["fc_min"], f"{res['fc_min']:.0f}")
+        r3.metric(texts["fc_diff"], f"{res['fc_diff']:.0f}")
+        r4.metric(texts["fc_ratio"], f"{res['fc_ratio']:.2f}")
+
+# TAB 2: Valsalva
+with tab_val:
+    if render_test_ui("valsalva", texts):
+        res = st.session_state.test_results["valsalva"]
+        r1, r2, r3 = st.columns(3)
+        r1.metric(texts["fc_max"], f"{res['fc_max']:.0f}")
+        r2.metric(texts["fc_min"], f"{res['fc_min']:.0f}")
+        r3.metric(texts["fc_ratio"], f"{res['fc_ratio']:.2f}")
+
+# TAB 3: Tilt Test
+with tab_tilt:
+    if render_test_ui("tilt", texts):
+        res = st.session_state.test_results["tilt"]
+        if res['tilt_ratio'] is not None:
+            r1, r2, r3 = st.columns(3)
+            r1.metric(texts["tilt_15"], f"{res['tilt_15']:.0f}")
+            r2.metric(texts["tilt_30"], f"{res['tilt_30']:.0f}")
+            r3.metric(texts["tilt_ratio"], f"{res['tilt_ratio']:.2f}")
+        else:
+            st.warning(texts["tilt_wait"])
+
+
+# --- GRAFICO INTERATTIVO ---
 st.markdown("---")
 if not st.session_state.history.empty:
     data_subset = st.session_state.history.tail(window_size)
