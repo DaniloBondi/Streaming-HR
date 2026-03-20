@@ -11,40 +11,35 @@ import os
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(page_title="HR Monitor Pro", layout="wide")
 
-# --- CSS PERSONALIZZATO (Per font, pulsanti e cronometro) ---
+# --- CSS PERSONALIZZATO ---
 st.markdown("""
 <style>
-    /* Nasconde overlay di caricamento */
     div[data-testid="stStatusWidget"] { display: none !important; }
-    
-    /* Titolo e margini superiori */
     .block-container { padding-top: 1rem !important; }
     h1 { margin-top: -35px !important; padding-bottom: 10px; font-size: 1.8rem !important; }
-
-    /* Metriche compatte */
     [data-testid="stMetricValue"] { font-size: 1.4rem !important; }
     [data-testid="stMetricLabel"] { font-size: 0.75rem !important; }
-
-    /* Pulsanti START/STOP REC molto piccoli */
     .stButton > button { 
         font-size: 0.7rem !important; 
         padding: 0.1rem 0.3rem !important; 
         min-height: 25px !important;
         line-height: 1.2 !important;
     }
-
-    /* Cronometro più piccolo e scuro */
     .timer-box {
         font-family: 'Courier New', monospace;
-        font-size: 1.4rem;
-        color: #005f6b; /* Blu petrolio scuro */
+        font-size: 1.6rem;
+        color: #005f6b;
         text-align: center;
         background: rgba(0,0,0,0.05);
         border: 1px solid #005f6b;
         border-radius: 6px;
-        padding: 4px;
+        padding: 6px;
         margin-bottom: 10px;
         font-weight: bold;
+    }
+    .timer-small {
+        font-size: 0.8rem;
+        color: #555;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -57,13 +52,16 @@ LANGS = {
         "start_test": "🟢 INIZIO TEST", "stop_test": "🔴 FINE TEST",
         "fc_live": "FC (live)", "fc_avg": "Media FC", "fc_max": "FC max", "fc_min": "FC min",
         "clinical": "🩺 Test clinici", "wait": "⏳ Attendi 30s...",
-        "respiro": "Respiro Profondo", "valsalva": "Valsalva", "tilt": "Tilt Test",
+        "respiro": "Respiro Profondo", 
+        "valsalva": "Valsalva test - cough test - handgrip test", 
+        "tilt": "Tilt test - active standing test",
+        "inspira": "🟢 INSPIRA", "espira": "🔵 ESPIRA",
+        "fc_diff": "FCmax - FCmin",
         "credits": "**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Informativa Privacy e Dati",
         "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: alla chiusura del browser, i dati vengono eliminati.<br>Sicurezza: il token Pulsoid inserito non viene mai archiviato.",
-        "token_label": "🔑 Token Pulsoid",
-        "win_label": "Finestra temporale (sec)"
+        "token_label": "🔑 Token Pulsoid", "win_label": "Finestra temporale (sec)"
     },
     "🇬🇧 ENG": {
         "title": "📊❤️ Live HR Monitoring",
@@ -71,13 +69,16 @@ LANGS = {
         "start_test": "🟢 START TEST", "stop_test": "🔴 STOP TEST",
         "fc_live": "HR (live)", "fc_avg": "Avg HR", "fc_max": "Max HR", "fc_min": "Min HR",
         "clinical": "🩺 Clinical Tests", "wait": "⏳ Wait 30s...",
-        "respiro": "Deep Breathing", "valsalva": "Valsalva", "tilt": "Tilt Test",
+        "respiro": "Deep Breathing", 
+        "valsalva": "Valsalva test - cough test - handgrip test", 
+        "tilt": "Tilt test - active standing test",
+        "inspira": "🟢 INHALE", "espira": "🔵 EXHALE",
+        "fc_diff": "HRmax - HRmin",
         "credits": "**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Privacy Policy",
         "privacy_text": "No storage: data remains only in temporary RAM.<br>Deletion: browser closing deletes data.<br>Security: token is never stored.",
-        "token_label": "🔑 Pulsoid Token",
-        "win_label": "Time window (sec)"
+        "token_label": "🔑 Pulsoid Token", "win_label": "Time window (sec)"
     }
 }
 
@@ -85,67 +86,52 @@ st_autorefresh(interval=500, key="hr_refresher")
 
 # --- STATO DELLA SESSIONE ---
 for key, default in {
-    'history': pd.DataFrame(columns=['Sec', 'BPM']),
-    'running': False,
-    'active_test': None,
-    'freeze_view': False,
+    'history': pd.DataFrame(columns=['Sec', 'BPM']), 'running': False,
+    'active_test': None, 'freeze_view': False,
     'test_data': pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec']),
-    'markers': [],
-    'results': {},
-    'last_ts': ""
+    'markers': [], 'results': {}, 'last_ts': ""
 }.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
+    if key not in st.session_state: st.session_state[key] = default
 
 def get_bpm(token):
     if not token: return None
     try:
-        r = requests.get("https://dev.pulsoid.net/api/v1/data/heart_rate/latest", 
-                         headers={"Authorization": f"Bearer {token}"}, timeout=1)
+        r = requests.get("https://dev.pulsoid.net/api/v1/data/heart_rate/latest", headers={"Authorization": f"Bearer {token}"}, timeout=1)
         return r.json().get('data', {}).get('heart_rate') if r.status_code == 200 else None
     except: return None
 
-# --- SIDEBAR (Ripristinata con Credits e Loghi) ---
+# --- SIDEBAR ---
 with st.sidebar:
     lang = st.radio("Lang", ["🇮🇹 ITA", "🇬🇧 ENG"], horizontal=True, label_visibility="collapsed")
     t = LANGS[lang]
     st.markdown("---")
-    
-    italy_tz = pytz.timezone('Europe/Rome')
-    st.markdown(f"### 🕐 {datetime.now(italy_tz).strftime('%H:%M:%S')}")
+    st.markdown(f"### 🕐 {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M:%S')}")
 
     token = st.text_input(t["token_label"], type="password")
     
     c1, c2 = st.columns(2)
     if c1.button(t["start_rec"], type="primary", disabled=not token):
-        st.session_state.running = True
-        st.session_state.freeze_view = False
+        st.session_state.running, st.session_state.freeze_view = True, False
     if c2.button(t["stop_rec"]):
-        st.session_state.running = False
-        st.session_state.active_test = None
+        st.session_state.running, st.session_state.active_test = False, None
 
     win = st.slider(t["win_label"], 10, 300, 60)
     
     if st.button("🗑 Reset", use_container_width=True):
         st.session_state.history = pd.DataFrame(columns=['Sec', 'BPM'])
-        st.session_state.markers = []
-        st.session_state.results = {}
-        st.session_state.freeze_view = False
+        st.session_state.markers, st.session_state.results = [], {}
+        st.session_state.freeze_view, st.session_state.running, st.session_state.active_test = False, False, None
         st.rerun()
 
     st.markdown("---")
     st.caption(t["credits"])
-    
-    # Loghi
     lc1, lc2 = st.columns(2)
     try:
         if os.path.exists("logo UDA.png"): lc1.image("logo UDA.png", width=80)
         if os.path.exists("Logo UnivAq.png"): lc2.image("Logo UnivAq.png", width=80)
     except: pass
-
     st.caption(t["creator"])
-    with st.expander(t["privacy_title"]):
-        st.markdown(f"<small>{t['privacy_text']}</small>", unsafe_allow_html=True)
+    with st.expander(t["privacy_title"]): st.markdown(f"<small>{t['privacy_text']}</small>", unsafe_allow_html=True)
 
 # --- DASHBOARD ---
 st.title(t["title"])
@@ -159,8 +145,7 @@ if bpm and st.session_state.running:
         st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame([{'Sec': sec_now, 'BPM': bpm}])], ignore_index=True)
         st.session_state.last_ts = curr_ts
         if st.session_state.active_test:
-            t_row = pd.DataFrame([{'T_Sec': len(st.session_state.test_data), 'BPM': bpm, 'G_Sec': sec_now}])
-            st.session_state.test_data = pd.concat([st.session_state.test_data, t_row], ignore_index=True)
+            st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': len(st.session_state.test_data), 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
 
 # UI Metriche
 m1, m2, m3, m4 = st.columns(4)
@@ -174,11 +159,24 @@ else:
     m1.metric(t["fc_live"], "--")
     m2.info("Avvia START REC")
 
-# Cronometro (Più piccolo e scuro)
+# Cronometro Dinamico
 if st.session_state.active_test:
-    st.markdown(f"<div class='timer-box'>⏱️ TEST: {len(st.session_state.test_data)}s</div>", unsafe_allow_html=True)
+    elapsed = len(st.session_state.test_data)
+    if st.session_state.active_test == "res":
+        # Logica 5s Inspira / 5s Espira
+        cycle_time = elapsed % 10
+        if cycle_time < 5:
+            phase_text = t["inspira"]
+            sec_left = 5 - cycle_time
+        else:
+            phase_text = t["espira"]
+            sec_left = 10 - cycle_time
+        st.markdown(f"<div class='timer-box'>{phase_text} ({sec_left}s)<br><span class='timer-small'>⏱️ TOT: {elapsed}s</span></div>", unsafe_allow_html=True)
+    else:
+        # Cronometro normale per gli altri test
+        st.markdown(f"<div class='timer-box'>⏱️ TEST: {elapsed}s</div>", unsafe_allow_html=True)
 
-# Grafico (Senza sfumatura, linea continua)
+# Grafico (Linea continua senza sfumatura)
 if not hist.empty:
     df_plot = hist[(hist['Sec'] >= st.session_state.test_data['G_Sec'].min()-2) & (hist['Sec'] <= st.session_state.test_data['G_Sec'].max()+2)] if st.session_state.freeze_view else hist.tail(win)
     
@@ -212,12 +210,20 @@ def handle_test(name):
         else:
             d = st.session_state.test_data
             st.session_state.freeze_view = True
+            
+            # Calcoli unificati per respiro e valsalva/cough/handgrip (aggiunto 'diff')
             if name in ["res", "val"]:
-                st.session_state.results[name] = {'max': d['BPM'].max(), 'min': d['BPM'].min(), 'ratio': d['BPM'].max()/d['BPM'].min()}
+                st.session_state.results[name] = {
+                    'max': d['BPM'].max(), 
+                    'min': d['BPM'].min(), 
+                    'diff': d['BPM'].max() - d['BPM'].min(),
+                    'ratio': d['BPM'].max() / d['BPM'].min() if d['BPM'].min() > 0 else 0
+                }
             else:
                 v15 = d.iloc[15]['BPM'] if len(d)>15 else d['BPM'].iloc[-1]
                 v30 = d.iloc[30]['BPM'] if len(d)>30 else d['BPM'].iloc[-1]
                 st.session_state.results[name] = {'v15': v15, 'v30': v30, 'ratio': v30/v15}
+        
         st.session_state.active_test = None
         st.rerun()
 
@@ -225,11 +231,18 @@ def handle_test(name):
     if res == "error": st.warning(t["wait"])
     elif isinstance(res, dict):
         st.success("Test OK")
-        rc = st.columns(3)
+        # Visualizzazione risultati
         if 'max' in res:
-            rc[0].metric("Max", f"{res['max']:.0f}"); rc[1].metric("Min", f"{res['min']:.0f}"); rc[2].metric("Ratio", f"{res['ratio']:.2f}")
+            rc = st.columns(4) # Ora sono 4 colonne per far spazio alla 'diff'
+            rc[0].metric(t["fc_max"], f"{res['max']:.0f}")
+            rc[1].metric(t["fc_min"], f"{res['min']:.0f}")
+            rc[2].metric(t["fc_diff"], f"{res['diff']:.0f}") # FCmax - FCmin aggiunto anche in Valsalva
+            rc[3].metric("Ratio", f"{res['ratio']:.2f}")
         else:
-            rc[0].metric("15s", f"{res['v15']:.0f}"); rc[1].metric("30s", f"{res['v30']:.0f}"); rc[2].metric("30:15", f"{res['ratio']:.2f}")
+            rc = st.columns(3)
+            rc[0].metric("15s", f"{res['v15']:.0f}")
+            rc[1].metric("30s", f"{res['v30']:.0f}")
+            rc[2].metric("30:15", f"{res['ratio']:.2f}")
 
 with tabs[0]: handle_test("res")
 with tabs[1]: handle_test("val")
