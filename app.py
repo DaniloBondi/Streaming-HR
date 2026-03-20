@@ -10,6 +10,24 @@ import os
 
 st.set_page_config(page_title="Monitoraggio FC / HR Monitor", layout="wide")
 
+# --- INIEZIONE CSS PER DIMENSIONI FONT ---
+st.markdown("""
+<style>
+/* Riduci font metriche principali (valori) */
+[data-testid="stMetricValue"] {
+    font-size: 1.8rem !important;
+}
+/* Riduci font label metriche */
+[data-testid="stMetricLabel"] {
+    font-size: 0.9rem !important;
+}
+/* Riduci font pulsanti sidebar (START REC / STOP REC) */
+.stButton > button {
+    font-size: 0.85rem !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 LANGUAGES = {
     "🇮🇹 ITA": {
         "main_title": "📊❤️ Monitoraggio live frequenza cardiaca",
@@ -19,6 +37,7 @@ LANGUAGES = {
         "btn_stop": "⏹️ STOP REC",
         "btn_test_start": "🟢 INIZIO TEST",
         "btn_test_end": "🔴 FINE TEST",
+        "test_clinical_title": "🩺 Test clinici",
         "test_deep_breath": "Respiro Profondo",
         "test_valsalva": "Valsalva",
         "test_tilt": "Tilt Test",
@@ -28,8 +47,10 @@ LANGUAGES = {
         "privacy_title": "🛡️ Informativa Privacy e Dati",
         "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: alla chiusura del browser, i dati vengono eliminati.<br>Sicurezza: il token Pulsoid inserito non viene mai archiviato.",
         "info_token": "👈 Inserisci il tuo Token Pulsoid nella barra laterale per avviare il monitoraggio.",
-        "hr_live": "Heart Rate (Live)",
-        "avg_bpm": "Media BPM Sessione",
+        "hr_live": "FC (live)",
+        "avg_bpm": "Media FC",
+        "fc_max_global": "FC max",
+        "fc_min_global": "FC min",
         "session_done": "✅ Sessione conclusa. Dati totali:",
         "session_short": "Sessione troppo breve per il calcolo.",
         "hr_paused": "Heart Rate",
@@ -50,7 +71,7 @@ LANGUAGES = {
         "tilt_30": "FC a 30s",
         "start_recording": "⚠️ Avvia prima la registrazione generale con START REC",
         "test_no_data": "Nessun dato del test disponibile",
-        "tilt_wait": "⏳ Attendi almeno 30 secondi per il risultato 30:15"
+        "test_wait_30": "⏳ Attendi almeno 30 secondi per avere un risultato valido"
     },
     "🇬🇧 ENG": {
         "main_title": "📊❤️ Live heart rate monitoring",
@@ -60,6 +81,7 @@ LANGUAGES = {
         "btn_stop": "⏹️ STOP REC",
         "btn_test_start": "🟢 START TEST",
         "btn_test_end": "🔴 END TEST",
+        "test_clinical_title": "🩺 Clinical Tests",
         "test_deep_breath": "Deep Breathing",
         "test_valsalva": "Valsalva",
         "test_tilt": "Tilt Test",
@@ -69,8 +91,10 @@ LANGUAGES = {
         "privacy_title": "🛡️ Privacy and Data Policy",
         "privacy_text": "No storage: data remains only in temporary RAM during the session.<br>Deletion: closing the browser deletes the data.<br>Security: the entered Pulsoid token is never stored.",
         "info_token": "👈 Insert your Pulsoid Token in the sidebar to start monitoring.",
-        "hr_live": "Heart Rate (Live)",
-        "avg_bpm": "Session Avg BPM",
+        "hr_live": "HR (Live)",
+        "avg_bpm": "Avg HR",
+        "fc_max_global": "Max HR",
+        "fc_min_global": "Min HR",
         "session_done": "✅ Session ended. Total data:",
         "session_short": "Session too short for calculation.",
         "hr_paused": "Heart Rate",
@@ -91,7 +115,7 @@ LANGUAGES = {
         "tilt_30": "HR at 30s",
         "start_recording": "⚠️ Start general recording with START REC first",
         "test_no_data": "No test data available",
-        "tilt_wait": "⏳ Wait at least 30 seconds for the 30:15 result"
+        "test_wait_30": "⏳ Wait at least 30 seconds for a valid result"
     }
 }
 
@@ -105,9 +129,11 @@ if 'running' not in st.session_state:
 if 'last_timestamp' not in st.session_state:
     st.session_state.last_timestamp = ""
 
-# Stati per i test clinici
+# Stati per i test clinici e marker sul grafico
+if 'test_markers' not in st.session_state:
+    st.session_state.test_markers = [] # Memorizza i secondi in cui inizia un test
 if 'active_test' not in st.session_state:
-    st.session_state.active_test = None # Può essere "deep_breath", "valsalva", o "tilt"
+    st.session_state.active_test = None
 if 'test_data' not in st.session_state:
     st.session_state.test_data = pd.DataFrame(columns=['Test_Sec', 'BPM'])
 if 'test_results' not in st.session_state:
@@ -145,7 +171,7 @@ with st.sidebar:
         st.session_state.running = True
     if c2.button(texts["btn_stop"], use_container_width=True):
         st.session_state.running = False
-        st.session_state.active_test = None # Ferma anche eventuali test in corso
+        st.session_state.active_test = None
 
     window_size = st.slider(texts["window_slider"], 10, 300, 60)
 
@@ -157,6 +183,7 @@ with st.sidebar:
             st.session_state.last_timestamp = ""
             st.session_state.running = False
             st.session_state.active_test = None
+            st.session_state.test_markers = []
             st.session_state.test_data = pd.DataFrame(columns=['Test_Sec', 'BPM'])
             st.session_state.test_results = {}
             st.rerun()
@@ -165,27 +192,8 @@ with st.sidebar:
     st.caption("**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini")
     
     st.write("")
-    logoc1, logoc2 = st.columns(2)
-    
-    try:
-        with logoc1:
-            if os.path.exists("logo UDA.png"):
-                st.image("logo UDA.png", width=100)
-        with logoc2:
-            if os.path.exists("Logo UnivAq.png"):
-                st.image("Logo UnivAq.png", width=100)
-    except Exception as e:
-        pass
-    
-    st.caption(texts["creator"])
-
-    st.write("") 
     with st.expander(texts["privacy_title"]):
-        st.markdown(f"""
-        <small>
-        {texts["privacy_text"]}
-        </small>
-        """, unsafe_allow_html=True)
+        st.markdown(f"<small>{texts['privacy_text']}</small>", unsafe_allow_html=True)
 
 # --- DASHBOARD PRINCIPALE ---
 st.title(texts["main_title"])
@@ -198,11 +206,12 @@ else:
 
 current_ts = datetime.now().strftime("%H:%M:%S")
 
-col_val, col_avg = st.columns(2)
+# Metriche principali: 4 Colonne per includere FC Max e FC Min
+col_live, col_avg, col_max, col_min = st.columns(4)
 
 if bpm:
     if st.session_state.running:
-        col_val.metric(texts["hr_live"], f"{bpm} BPM")
+        col_live.metric(texts["hr_live"], f"{bpm} BPM")
         
         if st.session_state.last_timestamp != current_ts:
             sec_elapsed = len(st.session_state.history)
@@ -210,7 +219,7 @@ if bpm:
             st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
             st.session_state.last_timestamp = current_ts
             
-            # Se c'è un test in corso, registra i dati nel dataframe separato del test
+            # Registrazione dati test
             if st.session_state.active_test is not None:
                 test_sec = len(st.session_state.test_data)
                 test_row = pd.DataFrame([{'Test_Sec': test_sec, 'BPM': bpm}])
@@ -218,88 +227,125 @@ if bpm:
 
         if not st.session_state.history.empty:
             avg_bpm_session = st.session_state.history['BPM'].mean()
-            col_avg.metric(texts["avg_bpm"], f"{avg_bpm_session:.1f} BPM")
+            max_bpm_session = st.session_state.history['BPM'].max()
+            min_bpm_session = st.session_state.history['BPM'].min()
+            
+            col_avg.metric(texts["avg_bpm"], f"{avg_bpm_session:.1f}")
+            col_max.metric(texts["fc_max_global"], f"{max_bpm_session:.0f}")
+            col_min.metric(texts["fc_min_global"], f"{min_bpm_session:.0f}")
             
     else:
         if not st.session_state.history.empty:
             avg_bpm_total = st.session_state.history['BPM'].mean()
-            col_val.metric(texts["avg_bpm"], f"{avg_bpm_total:.1f} BPM")
-            col_avg.success(f"{texts['session_done']} {len(st.session_state.history)} {texts['sec']}.")
+            max_bpm_total = st.session_state.history['BPM'].max()
+            min_bpm_total = st.session_state.history['BPM'].min()
+            
+            col_live.metric(texts["hr_paused"], f"{bpm} BPM")
+            col_avg.metric(texts["avg_bpm"], f"{avg_bpm_total:.1f}")
+            col_max.metric(texts["fc_max_global"], f"{max_bpm_total:.0f}")
+            col_min.metric(texts["fc_min_global"], f"{min_bpm_total:.0f}")
+            st.success(f"{texts['session_done']} {len(st.session_state.history)} {texts['sec']}.")
         else:
-            col_val.metric(texts["hr_paused"], f"{bpm} BPM")
+            col_live.metric(texts["hr_paused"], f"{bpm} BPM")
             col_avg.warning(texts["paused_msg"])
 elif user_token:
     st.error(texts["error_signal"])
 
-# --- SEZIONE TEST CLINICI ---
-st.markdown("---")
-st.subheader("🩺 Clinical Tests")
 
-# Uso i Tab per separare i tre test
-tab_db, tab_val, tab_tilt = st.tabs([f"🫁 {texts['test_deep_breath']}", f"😤 {texts['test_valsalva']}", f"🧍 {texts['test_tilt']}"])
+# --- GRAFICO INTERATTIVO (Spostato in alto) ---
+st.markdown("---")
+if not st.session_state.history.empty:
+    data_subset = st.session_state.history.tail(window_size)
+    
+    avg_bpm = data_subset['BPM'].mean()
+    y_min = max(20, avg_bpm - 20)
+    y_max = y_min + 50
+
+    line = alt.Chart(data_subset).mark_line(color='#ff4b4b', interpolate='monotone').encode(
+        x=alt.X('Secondi:Q', axis=alt.Axis(grid=True, tickCount=window_size//5, gridDash=[4,4]), title=texts["chart_x"]),
+        y=alt.Y('BPM:Q', scale=alt.Scale(domain=[y_min, y_max]), title=texts["chart_y"])
+    ).interactive()
+
+    trend = line.transform_regression('Secondi', 'BPM').mark_line(color='white', size=2, opacity=0.8)
+
+    # Aggiungo i marker verticali se presenti nella finestra temporale attuale
+    chart_layers = [line, trend]
+    if st.session_state.test_markers:
+        markers_df = pd.DataFrame({'Secondi': st.session_state.test_markers})
+        # Filtra i marker per mostrare solo quelli visibili nella finestra
+        markers_in_window = markers_df[markers_df['Secondi'] >= data_subset['Secondi'].min()]
+        
+        if not markers_in_window.empty:
+            rules = alt.Chart(markers_in_window).mark_rule(color='#00e5ff', strokeWidth=2, strokeDash=[4,4]).encode(
+                x='Secondi:Q'
+            )
+            chart_layers.append(rules)
+
+    st.altair_chart(alt.layer(*chart_layers), use_container_width=True)
+
+
+# --- SEZIONE TEST CLINICI (Spostata in basso) ---
+st.subheader(texts["test_clinical_title"])
+
+tab_db, tab_val, tab_tilt = st.tabs([f"🌬️ {texts['test_deep_breath']}", f"😤 {texts['test_valsalva']}", f"🧍 {texts['test_tilt']}"])
 
 def render_test_ui(test_id, tab_texts):
-    """Funzione helper per renderizzare i bottoni e i risultati per ogni test"""
     c1, c2 = st.columns(2)
     
-    # Bottone INIZIO
+    # Bottone INIZIO (Salva anche il marker nel grafico)
     if c1.button(texts["btn_test_start"], key=f"start_{test_id}", use_container_width=True, disabled=not st.session_state.running):
         st.session_state.active_test = test_id
-        st.session_state.test_data = pd.DataFrame(columns=['Test_Sec', 'BPM']) # Reset dati
-        st.session_state.test_results[test_id] = None # Reset risultati precedenti
+        st.session_state.test_data = pd.DataFrame(columns=['Test_Sec', 'BPM'])
+        st.session_state.test_results[test_id] = None 
+        # Aggiungi marker verticale sul grafico principale
+        st.session_state.test_markers.append(len(st.session_state.history))
         st.rerun()
 
     # Bottone FINE
     if c2.button(texts["btn_test_end"], key=f"end_{test_id}", use_container_width=True, disabled=(st.session_state.active_test != test_id)):
         st.session_state.active_test = None
+        df_test = st.session_state.test_data
         
-        # Calcolo risultati alla fine del test
-        if not st.session_state.test_data.empty:
-            df_test = st.session_state.test_data
-            
-            if test_id == "deep_breath":
-                fc_max = df_test['BPM'].max()
-                fc_min = df_test['BPM'].min()
-                st.session_state.test_results[test_id] = {
-                    'fc_max': fc_max,
-                    'fc_min': fc_min,
-                    'fc_diff': fc_max - fc_min,
-                    'fc_ratio': fc_max / fc_min if fc_min > 0 else 0
-                }
-            
-            elif test_id == "valsalva":
-                fc_max = df_test['BPM'].max()
-                fc_min = df_test['BPM'].min()
-                st.session_state.test_results[test_id] = {
-                    'fc_max': fc_max,
-                    'fc_min': fc_min,
-                    'fc_ratio': fc_max / fc_min if fc_min > 0 else 0
-                }
-                
-            elif test_id == "tilt":
-                # Cerca i valori a 15 e 30 secondi. Usa .iloc per evitare errori se mancano secondi esatti
-                bpm_15 = df_test[df_test['Test_Sec'] == 15]['BPM'].values
-                bpm_30 = df_test[df_test['Test_Sec'] == 30]['BPM'].values
-                
-                # Fallback: prendi il valore più vicino se esattamente 15 o 30 non esiste
-                v_15 = bpm_15[0] if len(bpm_15) > 0 else (df_test.iloc[15]['BPM'] if len(df_test) > 15 else None)
-                v_30 = bpm_30[0] if len(bpm_30) > 0 else (df_test.iloc[30]['BPM'] if len(df_test) > 30 else None)
-                
-                st.session_state.test_results[test_id] = {
-                    'tilt_15': v_15,
-                    'tilt_30': v_30,
-                    'tilt_ratio': (v_30 / v_15) if (v_15 and v_30 and v_15 > 0) else None
-                }
+        # Gestione alert dei 30 secondi per tutti i test
+        if not df_test.empty:
+            if len(df_test) < 30:
+                st.session_state.test_results[test_id] = {"error": texts["test_wait_30"]}
+            else:
+                if test_id == "deep_breath":
+                    fc_max = df_test['BPM'].max()
+                    fc_min = df_test['BPM'].min()
+                    st.session_state.test_results[test_id] = {
+                        'fc_max': fc_max, 'fc_min': fc_min,
+                        'fc_diff': fc_max - fc_min, 'fc_ratio': fc_max / fc_min if fc_min > 0 else 0
+                    }
+                elif test_id == "valsalva":
+                    fc_max = df_test['BPM'].max()
+                    fc_min = df_test['BPM'].min()
+                    st.session_state.test_results[test_id] = {
+                        'fc_max': fc_max, 'fc_min': fc_min,
+                        'fc_ratio': fc_max / fc_min if fc_min > 0 else 0
+                    }
+                elif test_id == "tilt":
+                    bpm_15 = df_test[df_test['Test_Sec'] == 15]['BPM'].values
+                    bpm_30 = df_test[df_test['Test_Sec'] == 30]['BPM'].values
+                    v_15 = bpm_15[0] if len(bpm_15) > 0 else df_test.iloc[15]['BPM']
+                    v_30 = bpm_30[0] if len(bpm_30) > 0 else df_test.iloc[30]['BPM']
+                    st.session_state.test_results[test_id] = {
+                        'tilt_15': v_15, 'tilt_30': v_30,
+                        'tilt_ratio': (v_30 / v_15) if (v_15 and v_30 and v_15 > 0) else None
+                    }
         st.rerun()
 
-    # Feedback visivo
     if not st.session_state.running:
         st.warning(texts["start_recording"])
     elif st.session_state.active_test == test_id:
         st.info(f"{texts['test_running']} {len(st.session_state.test_data)} {texts['sec']}")
     elif st.session_state.test_results.get(test_id):
-        st.success(texts['test_completed'])
-        return True # Segnala che ci sono risultati da mostrare
+        if "error" in st.session_state.test_results[test_id]:
+            st.warning(st.session_state.test_results[test_id]["error"])
+        else:
+            st.success(texts['test_completed'])
+            return True
     return False
 
 # TAB 1: Deep Breathing
@@ -325,35 +371,7 @@ with tab_val:
 with tab_tilt:
     if render_test_ui("tilt", texts):
         res = st.session_state.test_results["tilt"]
-        if res['tilt_ratio'] is not None:
-            r1, r2, r3 = st.columns(3)
-            r1.metric(texts["tilt_15"], f"{res['tilt_15']:.0f}")
-            r2.metric(texts["tilt_30"], f"{res['tilt_30']:.0f}")
-            r3.metric(texts["tilt_ratio"], f"{res['tilt_ratio']:.2f}")
-        else:
-            st.warning(texts["tilt_wait"])
-
-
-# --- GRAFICO INTERATTIVO ---
-st.markdown("---")
-if not st.session_state.history.empty:
-    data_subset = st.session_state.history.tail(window_size)
-    
-    avg_bpm = data_subset['BPM'].mean()
-    y_min = max(20, avg_bpm - 20)
-    y_max = y_min + 50
-
-    line = alt.Chart(data_subset).mark_line(color='#ff4b4b', interpolate='monotone').encode(
-        x=alt.X('Secondi:Q',
-                axis=alt.Axis(grid=True, tickCount=window_size//5, gridDash=[4,4]),
-                title=texts["chart_x"]),
-        y=alt.Y('BPM:Q', scale=alt.Scale(domain=[y_min, y_max]), title=texts["chart_y"])
-    ).interactive()
-
-    trend = line.transform_regression('Secondi', 'BPM').mark_line(
-        color='white', 
-        size=2, 
-        opacity=0.8
-    )
-
-    st.altair_chart(line + trend, use_container_width=True)
+        r1, r2, r3 = st.columns(3)
+        r1.metric(texts["tilt_15"], f"{res['tilt_15']:.0f}")
+        r2.metric(texts["tilt_30"], f"{res['tilt_30']:.0f}")
+        r3.metric(texts["tilt_ratio"], f"{res['tilt_ratio']:.2f}")
