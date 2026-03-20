@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import pandas as pd
-import numpy as np
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 import pytz
@@ -41,6 +40,8 @@ st.markdown("""
         font-size: 0.8rem;
         color: #555;
     }
+    /* Stile per far sembrare il radio button più simile a un menu di tab */
+    div.row-widget.stRadio > div { flex-direction: row; justify-content: flex-start; gap: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -60,7 +61,7 @@ LANGS = {
         "credits": "**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Informativa Privacy e Dati",
-        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: alla chiusura del browser, i dati vengono eliminati.<br>Sicurezza: il token Pulsoid inserito non viene mai archiviato.",
+        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token non viene archiviato.",
         "token_label": "🔑 Token Pulsoid", "win_label": "Finestra temporale (sec)"
     },
     "🇬🇧 ENG": {
@@ -77,7 +78,7 @@ LANGS = {
         "credits": "**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Privacy Policy",
-        "privacy_text": "No storage: data remains only in temporary RAM.<br>Deletion: browser closing deletes data.<br>Security: token is never stored.",
+        "privacy_text": "No storage: data remains only in RAM.<br>Deletion: browser closing deletes data.<br>Security: token is never stored.",
         "token_label": "🔑 Pulsoid Token", "win_label": "Time window (sec)"
     }
 }
@@ -93,6 +94,41 @@ for key, default in {
 }.items():
     if key not in st.session_state: st.session_state[key] = default
 
+# --- FUNZIONI CALLBACK (Rendono i tasti istantanei) ---
+def cb_start_rec():
+    st.session_state.running, st.session_state.freeze_view = True, False
+
+def cb_stop_rec():
+    st.session_state.running, st.session_state.active_test = False, None
+
+def cb_reset():
+    st.session_state.history = pd.DataFrame(columns=['Sec', 'BPM'])
+    st.session_state.markers, st.session_state.results = [], {}
+    st.session_state.freeze_view, st.session_state.running, st.session_state.active_test = False, False, None
+
+def cb_start_test(name):
+    st.session_state.active_test, st.session_state.freeze_view = name, False
+    st.session_state.test_data = pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec'])
+    st.session_state.markers.append(len(st.session_state.history))
+
+def cb_stop_test(name):
+    if len(st.session_state.test_data) < 30:
+        st.session_state.results[name] = "error"
+    else:
+        d = st.session_state.test_data
+        st.session_state.freeze_view = True
+        if name in ["res", "val"]:
+            st.session_state.results[name] = {
+                'max': d['BPM'].max(), 'min': d['BPM'].min(), 'diff': d['BPM'].max() - d['BPM'].min(),
+                'ratio': d['BPM'].max() / d['BPM'].min() if d['BPM'].min() > 0 else 0
+            }
+        else:
+            v15 = d.iloc[15]['BPM'] if len(d)>15 else d['BPM'].iloc[-1]
+            v30 = d.iloc[30]['BPM'] if len(d)>30 else d['BPM'].iloc[-1]
+            st.session_state.results[name] = {'v15': v15, 'v30': v30, 'ratio': v30/v15}
+    st.session_state.active_test = None
+
+# API CALL
 def get_bpm(token):
     if not token: return None
     try:
@@ -110,18 +146,12 @@ with st.sidebar:
     token = st.text_input(t["token_label"], type="password")
     
     c1, c2 = st.columns(2)
-    if c1.button(t["start_rec"], type="primary", disabled=not token):
-        st.session_state.running, st.session_state.freeze_view = True, False
-    if c2.button(t["stop_rec"]):
-        st.session_state.running, st.session_state.active_test = False, None
+    # Usa on_click invece dell'if!
+    c1.button(t["start_rec"], type="primary", disabled=not token, on_click=cb_start_rec)
+    c2.button(t["stop_rec"], on_click=cb_stop_rec)
 
     win = st.slider(t["win_label"], 10, 300, 60)
-    
-    if st.button("🗑 Reset", use_container_width=True):
-        st.session_state.history = pd.DataFrame(columns=['Sec', 'BPM'])
-        st.session_state.markers, st.session_state.results = [], {}
-        st.session_state.freeze_view, st.session_state.running, st.session_state.active_test = False, False, None
-        st.rerun()
+    st.button("🗑 Reset", use_container_width=True, on_click=cb_reset)
 
     st.markdown("---")
     st.caption(t["credits"])
@@ -138,7 +168,6 @@ st.title(t["title"])
 bpm = get_bpm(token)
 curr_ts = datetime.now().strftime("%H:%M:%S")
 
-# Registrazione Dati
 if bpm and st.session_state.running:
     if st.session_state.last_ts != curr_ts:
         sec_now = len(st.session_state.history)
@@ -147,7 +176,6 @@ if bpm and st.session_state.running:
         if st.session_state.active_test:
             st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': len(st.session_state.test_data), 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
 
-# UI Metriche
 m1, m2, m3, m4 = st.columns(4)
 hist = st.session_state.history
 if not hist.empty:
@@ -159,84 +187,50 @@ else:
     m1.metric(t["fc_live"], "--")
     m2.info("Avvia START REC")
 
-# Cronometro Dinamico
 if st.session_state.active_test:
     elapsed = len(st.session_state.test_data)
     if st.session_state.active_test == "res":
-        # Logica 5s Inspira / 5s Espira
         cycle_time = elapsed % 10
-        if cycle_time < 5:
-            phase_text = t["inspira"]
-            sec_left = 5 - cycle_time
-        else:
-            phase_text = t["espira"]
-            sec_left = 10 - cycle_time
+        phase_text, sec_left = (t["inspira"], 5 - cycle_time) if cycle_time < 5 else (t["espira"], 10 - cycle_time)
         st.markdown(f"<div class='timer-box'>{phase_text} ({sec_left}s)<br><span class='timer-small'>⏱️ TOT: {elapsed}s</span></div>", unsafe_allow_html=True)
     else:
-        # Cronometro normale per gli altri test
         st.markdown(f"<div class='timer-box'>⏱️ TEST: {elapsed}s</div>", unsafe_allow_html=True)
 
-# Grafico (Linea continua senza sfumatura)
 if not hist.empty:
     df_plot = hist[(hist['Sec'] >= st.session_state.test_data['G_Sec'].min()-2) & (hist['Sec'] <= st.session_state.test_data['G_Sec'].max()+2)] if st.session_state.freeze_view else hist.tail(win)
-    
     line = alt.Chart(df_plot).mark_line(color='#ff4b4b', interpolate='monotone', size=3).encode(
         x=alt.X('Sec:Q', title="Secondi", scale=alt.Scale(nice=False)),
         y=alt.Y('BPM:Q', title="BPM", scale=alt.Scale(domain=[hist['BPM'].min()-5, hist['BPM'].max()+5]))
     )
-    
     layers = [line]
     if st.session_state.markers:
         layers.append(alt.Chart(pd.DataFrame({'Sec': st.session_state.markers})).mark_rule(color='#00e5ff', strokeDash=[5,5]).encode(x='Sec:Q'))
-
     st.altair_chart(alt.layer(*layers).interactive(), use_container_width=True)
 
-# --- TEST CLINICI ---
+# --- MENU TEST CLINICI (Sostituisce le Tabs per non perdere la selezione) ---
 st.markdown("---")
 st.subheader(t["clinical"])
-tabs = st.tabs([f"🌬️ {t['respiro']}", f"😤 {t['valsalva']}", f"🧍 {t['tilt']}"])
 
-def handle_test(name):
+# Stile navigazione Orizzontale al posto delle Tabs
+opzioni_test = [f"🌬️ {t['respiro']}", f"😤 {t['valsalva']}", f"🧍 {t['tilt']}"]
+scelta_test = st.radio("Seleziona Test", opzioni_test, horizontal=True, label_visibility="collapsed")
+
+def render_test_ui(name):
     cs, ce = st.columns(2)
-    if cs.button(t["start_test"], key=f"s_{name}", disabled=not st.session_state.running):
-        st.session_state.active_test, st.session_state.freeze_view = name, False
-        st.session_state.test_data = pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec'])
-        st.session_state.markers.append(len(st.session_state.history))
-        st.rerun()
-    
-    if ce.button(t["stop_test"], key=f"e_{name}", disabled=st.session_state.active_test != name):
-        if len(st.session_state.test_data) < 30:
-            st.session_state.results[name] = "error"
-        else:
-            d = st.session_state.test_data
-            st.session_state.freeze_view = True
-            
-            # Calcoli unificati per respiro e valsalva/cough/handgrip (aggiunto 'diff')
-            if name in ["res", "val"]:
-                st.session_state.results[name] = {
-                    'max': d['BPM'].max(), 
-                    'min': d['BPM'].min(), 
-                    'diff': d['BPM'].max() - d['BPM'].min(),
-                    'ratio': d['BPM'].max() / d['BPM'].min() if d['BPM'].min() > 0 else 0
-                }
-            else:
-                v15 = d.iloc[15]['BPM'] if len(d)>15 else d['BPM'].iloc[-1]
-                v30 = d.iloc[30]['BPM'] if len(d)>30 else d['BPM'].iloc[-1]
-                st.session_state.results[name] = {'v15': v15, 'v30': v30, 'ratio': v30/v15}
-        
-        st.session_state.active_test = None
-        st.rerun()
+    # Pulsanti fulminei con callback
+    cs.button(t["start_test"], key=f"s_{name}", disabled=not st.session_state.running, on_click=cb_start_test, args=(name,))
+    ce.button(t["stop_test"], key=f"e_{name}", disabled=st.session_state.active_test != name, on_click=cb_stop_test, args=(name,))
 
     res = st.session_state.results.get(name)
-    if res == "error": st.warning(t["wait"])
+    if res == "error": 
+        st.warning(t["wait"])
     elif isinstance(res, dict):
         st.success("Test OK")
-        # Visualizzazione risultati
         if 'max' in res:
-            rc = st.columns(4) # Ora sono 4 colonne per far spazio alla 'diff'
+            rc = st.columns(4)
             rc[0].metric(t["fc_max"], f"{res['max']:.0f}")
             rc[1].metric(t["fc_min"], f"{res['min']:.0f}")
-            rc[2].metric(t["fc_diff"], f"{res['diff']:.0f}") # FCmax - FCmin aggiunto anche in Valsalva
+            rc[2].metric(t["fc_diff"], f"{res['diff']:.0f}")
             rc[3].metric("Ratio", f"{res['ratio']:.2f}")
         else:
             rc = st.columns(3)
@@ -244,6 +238,7 @@ def handle_test(name):
             rc[1].metric("30s", f"{res['v30']:.0f}")
             rc[2].metric("30:15", f"{res['ratio']:.2f}")
 
-with tabs[0]: handle_test("res")
-with tabs[1]: handle_test("val")
-with tabs[2]: handle_test("tilt")
+# Renderizza solo l'UI del test selezionato dal radio button
+if scelta_test == opzioni_test[0]: render_test_ui("res")
+elif scelta_test == opzioni_test[1]: render_test_ui("val")
+else: render_test_ui("tilt")
