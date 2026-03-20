@@ -228,18 +228,26 @@ st.subheader(f"🫁 {texts['test_title']}")
 test_col1, test_col2 = st.columns(2)
 
 # Bottone INIZIO TEST
-if test_col1.button(texts["btn_test_start"], use_container_width=True, type="primary", 
-                     disabled=not st.session_state.running):
+if test_col1.button(
+    texts["btn_test_start"], 
+    key="start_test_button",
+    use_container_width=True, 
+    type="primary", 
+    disabled=not st.session_state.running
+):
     if st.session_state.running:
         st.session_state.test_running = True
         st.session_state.test_data = pd.DataFrame(columns=['Secondi', 'BPM'])
         st.session_state.test_results = None
-    else:
-        st.warning(texts["start_recording"])
+        st.rerun()
 
-# Bottone FINE TEST
-if test_col2.button(texts["btn_test_end"], use_container_width=True, type="secondary",
-                    disabled=not st.session_state.test_running):
+# Bottone FINE TEST  
+if test_col2.button(
+    texts["btn_test_end"],
+    key="end_test_button", 
+    use_container_width=True,
+    disabled=not st.session_state.test_running
+):
     if st.session_state.test_running:
         st.session_state.test_running = False
         
@@ -256,7 +264,8 @@ if test_col2.button(texts["btn_test_end"], use_container_width=True, type="secon
                 'fc_diff': fc_diff,
                 'fc_ratio': fc_ratio
             }
-
+        st.rerun()
+        
 # Mostra stato del test
 if st.session_state.test_running:
     st.info(f"{texts['test_running']} {len(st.session_state.test_data)} {texts['sec']}")
