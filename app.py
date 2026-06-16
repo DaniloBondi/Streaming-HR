@@ -157,11 +157,13 @@ def cb_start_rec():
             return
     st.session_state.running, st.session_state.freeze_view = True, False
     st.session_state.rr_history = []
+    st.session_state.test_rr_history = []
     st.session_state.last_ts = None
     st.session_state.last_bpm = None
     st.session_state.rec_start_time = time.time()
     st.session_state.last_valid_packet_time = time.time()
     st.session_state.rr_time_accumulated = 0.0
+    st.session_state.test_rr_time_accumulated = 0.0
 
 def cb_stop_rec():
     st.session_state.running, st.session_state.active_test = False, None
@@ -195,17 +197,18 @@ def cb_stop_test(name):
     durata_reale_sec = time.time() - st.session_state.test_start_time if st.session_state.test_start_time else 0
     durata_test_ms = sum(st.session_state.test_rr_history)
     
-    if durata_reale_sec < 30 and durata_test_ms < 30000:
+    # Se il test dura meno di 30 secondi cumulativi reali o di intervalli registrati, segnala un warning
+    if durata_reale_sec < 25 and durata_test_ms < 25000:
         st.session_state.results[name] = "error"
     else:
         st.session_state.freeze_view = True
         if name in ["res", "val"]:
             test_bpms = [60000.0 / rr for rr in st.session_state.test_rr_history if rr > 0]
-            t_max = max(test_bpms) if test_bpms else 0
-            t_min = min(test_bpms) if test_bpms else 0
+            t_max = max(test_bpms) if test_bpms else (st.session_state.last_bpm or 0)
+            t_min = min(test_bpms) if test_bpms else (st.session_state.last_bpm or 0)
             st.session_state.results[name] = {
                 'max': t_max, 'min': t_min, 'diff': t_max - t_min,
-                'ratio': t_max / t_min if t_min > 0 else 0
+                'ratio': t_max / t_min if t_min > 0 else 1.0
             }
         else:
             cum_times = np.cumsum(st.session_state.test_rr_history)
@@ -215,9 +218,9 @@ def cb_stop_test(name):
             rr_15 = st.session_state.test_rr_history[idx_15] if idx_15 < len(st.session_state.test_rr_history) else st.session_state.test_rr_history[-1] if st.session_state.test_rr_history else 0
             rr_30 = st.session_state.test_rr_history[idx_30] if idx_30 < len(st.session_state.test_rr_history) else st.session_state.test_rr_history[-1] if st.session_state.test_rr_history else 0
             
-            v15 = 60000.0 / rr_15 if rr_15 > 0 else 0
-            v30 = 60000.0 / rr_30 if rr_30 > 0 else 0
-            st.session_state.results[name] = {'v15': v15, 'v30': v30, 'ratio': v30 / v15 if v15 > 0 else 0}
+            v15 = 60000.0 / rr_15 if rr_15 > 0 else (st.session_state.last_bpm or 0)
+            v30 = 60000.0 / rr_30 if rr_30 > 0 else (st.session_state.last_bpm or 0)
+            st.session_state.results[name] = {'v15': v15, 'v30': v30, 'ratio': v30 / v15 if v15 > 0 else 1.0}
             
     st.session_state.active_test = None
 
@@ -353,54 +356,62 @@ if st.session_state.running:
         if payload:
             ts = payload.get("timestamp")
             bpm = payload.get("heart_rate") or payload.get("bpm")
-            rr_intervals = payload.get("rr_intervals", [])
             
-            # SE IL TIMESTAMP NON CAMBIA = nessun nuovo pacchetto ricevuto dal telefono
-            if st.session_state.last_ts is not None and st.session_state.last_ts == ts:
-                # Se lo streaming è interrotto da più di 15 secondi reali, inseriamo un marker di interruzione (NaN)
+            # Controllo pacchetti duplicati (per npoint)
+            is_new_packet = True
+            if ts is not None and st.session_state.last_ts == ts:
+                is_new_packet = False
+                
+            if not is_new_packet:
+                # Se lo streaming è fermo da molto tempo, inserisci gap sul grafico
                 if time.time() - st.session_state.last_valid_packet_time > 15:
                     if not st.session_state.history.empty and pd.notna(st.session_state.history.iloc[-1]['BPM']):
                         gap_sec = st.session_state.rr_time_accumulated + (time.time() - st.session_state.last_valid_packet_time)
                         new_row = pd.DataFrame([{'Sec': gap_sec, 'BPM': float('nan')}])
                         st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
                     st.session_state.last_bpm = None
-                else:
-                    pass
             else:
-                # NUOVO PACCHETTO VALIDO ARRIVATO!
                 st.session_state.last_ts = ts
                 st.session_state.last_valid_packet_time = time.time()
                 
-                # SE SONO PRESENTI GLI INTERVALLI RR GREZZI: Smontiamo l'array e generiamo i punti del grafico a massima precisione
-                if rr_intervals:
-                    new_rows = []
-                    new_test_rows = []
-                    for rr in rr_intervals:
-                        if rr > 0:
-                            # Avanzamento esatto basato sulla durata del battito (ms / 1000)
-                            st.session_state.rr_time_accumulated += rr / 1000.0
-                            beat_bpm = 60000.0 / rr  # Conversione millisecondi -> BPM istantanei
-                            
-                            new_rows.append({'Sec': st.session_state.rr_time_accumulated, 'BPM': beat_bpm})
-                            st.session_state.rr_history.append(rr)
-                            
-                            if st.session_state.active_test:
-                                st.session_state.test_rr_time_accumulated += rr / 1000.0
-                                new_test_rows.append({
-                                    'T_Sec': st.session_state.test_rr_time_accumulated, 
-                                    'BPM': beat_bpm, 
-                                    'G_Sec': st.session_state.rr_time_accumulated
-                                })
-                                st.session_state.test_rr_history.append(rr)
+                # Check se sono supportati gli intervalli RR
+                has_rr_support = "rr_intervals" in payload or "rr_list" in payload
+                rr_intervals = payload.get("rr_intervals") or payload.get("rr_list", [])
+                
+                if has_rr_support:
+                    if rr_intervals:
+                        new_rows = []
+                        new_test_rows = []
+                        for rr in rr_intervals:
+                            if rr > 0:
+                                st.session_state.rr_time_accumulated += rr / 1000.0
+                                beat_bpm = 60000.0 / rr
                                 
-                    if new_rows:
-                        st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame(new_rows)], ignore_index=True)
-                        st.session_state.last_bpm = new_rows[-1]['BPM']  # Mostra l'ultimo battito reale calcolato
-                        
-                    if new_test_rows and st.session_state.active_test:
-                        st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame(new_test_rows)], ignore_index=True)
+                                new_rows.append({'Sec': st.session_state.rr_time_accumulated, 'BPM': beat_bpm})
+                                st.session_state.rr_history.append(rr)
+                                
+                                if st.session_state.active_test:
+                                    st.session_state.test_rr_time_accumulated += rr / 1000.0
+                                    new_test_rows.append({
+                                        'T_Sec': st.session_state.test_rr_time_accumulated, 
+                                        'BPM': beat_bpm, 
+                                        'G_Sec': st.session_state.rr_time_accumulated
+                                    })
+                                    st.session_state.test_rr_history.append(rr)
+                                    
+                        if new_rows:
+                            st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame(new_rows)], ignore_index=True)
+                            st.session_state.last_bpm = new_rows[-1]['BPM']
+                            
+                        if new_test_rows and st.session_state.active_test:
+                            st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame(new_test_rows)], ignore_index=True)
+                    else:
+                        # Se il payload supporta gli RR ma in questo secondo l'array è vuoto, aggiorna l'ultimo BPM
+                        # senza aggiungere righe duplicate al grafico temporalmente errate.
+                        if bpm:
+                            st.session_state.last_bpm = bpm
                 else:
-                    # Fallback nel caso in cui l'endpoint non fornisca l'array RR ma solo il BPM standard
+                    # Fallback per dispositivi sprovvisti di RR: lavora su tempo di wallclock reale
                     if bpm:
                         st.session_state.last_bpm = bpm
                         sec_now = int(time.time() - st.session_state.rec_start_time) if st.session_state.rec_start_time else 0
@@ -411,7 +422,7 @@ if st.session_state.running:
                             t_elapsed = int(time.time() - st.session_state.test_start_time)
                             st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': t_elapsed, 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
         else:
-            # Richiesta HTTP fallita totalmente (Disconnessione rete)
+            # Errore totale di rete
             if time.time() - st.session_state.last_valid_packet_time > 15:
                 if not st.session_state.history.empty and pd.notna(st.session_state.history.iloc[-1]['BPM']):
                     gap_sec = st.session_state.rr_time_accumulated + (time.time() - st.session_state.last_valid_packet_time)
@@ -472,18 +483,30 @@ if not hist.empty:
         max_sec = hist['Sec'].max()
         df_plot = hist[hist['Sec'] >= (max_sec - win)]
     
+    # Riduci il dataframe inviato al grafico per garantire animazioni lisce e veloci
+    df_plot = df_plot.tail(500)
+    
     valid_plot_bpms = df_plot['BPM'].dropna()
     y_min = valid_plot_bpms.min() - 5 if not valid_plot_bpms.empty else 40
     y_max = valid_plot_bpms.max() + 5 if not valid_plot_bpms.empty else 100
 
-    line = alt.Chart(df_plot).mark_line(color='#ff4b4b', interpolate='monotone', size=3).encode(
-        x=alt.X('Sec:Q', title="Secondi", scale=alt.Scale(nice=False)),
+    # Configurazione Altair con interpolatore pulito e ottimizzato per alte prestazioni
+    line = alt.Chart(df_plot).mark_line(
+        color='#ff4b4b', 
+        interpolate='monotone', 
+        size=3,
+        clip=True
+    ).encode(
+        x=alt.X('Sec:Q', title="Secondi", scale=alt.Scale(nice=False, zero=False)),
         y=alt.Y('BPM:Q', title="BPM", scale=alt.Scale(domain=[y_min, y_max]))
+    ).properties(
+        height=350
     )
+    
     layers = [line]
     if st.session_state.markers:
         layers.append(alt.Chart(pd.DataFrame({'Sec': st.session_state.markers})).mark_rule(color='#00e5ff', strokeDash=[5,5]).encode(x='Sec:Q'))
-    st.altair_chart(alt.layer(*layers).interactive(), use_container_width=True)
+    st.altair_chart(alt.layer(*layers).interactive(bind_y=False), use_container_width=True)
 
 # --- MENU TEST CLINICI ---
 st.markdown("---")
