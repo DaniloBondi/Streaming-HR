@@ -140,7 +140,9 @@ for key, default in {
     'rr_time_accumulated': 0.0, # Cronometro ad alta precisione basato sulla somma dei millisecondi RR globali
     'test_rr_time_accumulated': 0.0, # Cronometro ad alta precisione del test basato sui millisecondi RR
     'last_raw_payload': None,   # Per debug visivo comodo
-    'packet_counter': 0
+    'packet_counter': 0,
+    'is_sensor_rr_capable': None,
+    'synthesize_rr_if_missing': True
 }.items():
     if key not in st.session_state: st.session_state[key] = default
 
@@ -148,6 +150,21 @@ for key, default in {
 def calcola_metriche_rr(rr_list):
     """Calcola parametri statistici e RMSSD partendo da una lista di intervalli RR in ms"""
     if not rr_list or len(rr_list) == 0:
+        # Fallback se non ci sono intervalli RR registrati: leggiamo i dati BPM storici
+        if 'history' in st.session_state and not st.session_state.history.empty:
+            bpms = st.session_state.history['BPM'].dropna().tolist()
+            if len(bpms) > 0:
+                estimated_rrs = [60000.0 / b for b in bpms if b > 0]
+                rmssd = 0.0
+                if len(estimated_rrs) > 1:
+                    diffs = np.diff(estimated_rrs)
+                    rmssd = np.sqrt(np.mean(diffs ** 2))
+                return {
+                    "max": max(bpms),
+                    "min": min(bpms),
+                    "mean": np.mean(bpms),
+                    "rmssd": rmssd
+                }
         return {"max": 0, "min": 0, "mean": 0, "rmssd": 0}
     
     # Conversione intervalli RR (ms) in valori di Frequenza Cardiaca istantanea (BPM)
@@ -216,6 +233,13 @@ def cb_start_test(name):
     st.session_state.test_start_time = time.time()
 
 def cb_stop_test(name):
+    # Se test_rr_history è vuoto ma abbiamo raccolto dati BPM in test_data, ricostruiamo gli intervalli RR equivalenti!
+    if not st.session_state.test_rr_history and not st.session_state.test_data.empty:
+        bpms = st.session_state.test_data['BPM'].dropna().tolist()
+        if bpms:
+            st.session_state.test_rr_history = [int(60000.0 / b) for b in bpms if b > 0]
+            st.session_state.test_rr_time_accumulated = sum(st.session_state.test_rr_history) / 1000.0
+
     durata_reale_sec = time.time() - st.session_state.test_start_time if st.session_state.test_start_time else 0
     durata_test_ms = sum(st.session_state.test_rr_history)
     
@@ -393,6 +417,12 @@ if st.session_state.running:
             bpm = payload.get("heart_rate") or payload.get("bpm")
             rr_intervals = payload.get("rr_intervals", [])
             
+            # Extract capabilities
+            if "is_sensor_rr_capable" in payload:
+                st.session_state.is_sensor_rr_capable = payload.get("is_sensor_rr_capable")
+            if "synthesize_rr_if_missing" in payload:
+                st.session_state.synthesize_rr_if_missing = payload.get("synthesize_rr_if_missing")
+            
             # ACCUMULATION POLICY:
             # 1. MILLISECOND TIMESTAMPS: Compare full precision epoch values.
             # 2. LOCAL STREAMING IS CLEAR-ON-READ: So if rr_intervals list is present, they are ALWAYS new additions.
@@ -485,12 +515,13 @@ hist = st.session_state.history
 if not hist.empty:
     display_bpm = st.session_state.last_bpm if st.session_state.last_bpm is not None else float('nan')
     
-    if st.session_state.rr_history:
-        metrics_globali = calcola_metriche_rr(st.session_state.rr_history)
+    # Calcoliamo le metriche: se non ci sono dati RR reali, calcola_metriche_rr ripiegherà elegantemente sul calcolo basato su BPM
+    metrics_globali = calcola_metriche_rr(st.session_state.rr_history)
+    if metrics_globali["mean"] > 0:
         avg_val = f"{metrics_globali['mean']:.1f}"
         max_val = f"{metrics_globali['max']:.0f}"
         min_val = f"{metrics_globali['min']:.0f}"
-        rmssd_val = f"{metrics_globali['rmssd']:.1f} ms"
+        rmssd_val = f"{metrics_globali['rmssd']:.1f} ms" if metrics_globali['rmssd'] > 0 else "--"
     else:
         valid_bpms = hist['BPM'].dropna()
         avg_val = f"{valid_bpms.mean():.1f}" if not valid_bpms.empty else "--"
@@ -498,11 +529,38 @@ if not hist.empty:
         min_val = f"{valid_bpms.min():.0f}" if not valid_bpms.empty else "--"
         rmssd_val = "--"
         
+    # Diagnostica della sorgente dei dati RR per il calcolo indici
+    if st.session_state.rr_history:
+        if st.session_state.is_sensor_rr_capable is True:
+            source_badge = "🟢 RR Reali (Sensore Nativo)"
+            source_help = "I calcoli di HRV/RMSSD utilizzano intervalli RR reali trasmessi nativamente dal sensore fisico."
+        elif st.session_state.is_sensor_rr_capable is False:
+            if st.session_state.synthesize_rr_if_missing:
+                source_badge = "🟡 RR Ricostruiti (On-Device)"
+                source_help = "Il sensore fisico non invia RR. Gli intervalli RR sono ricostruiti sul telefono partendo dai BPM."
+            else:
+                source_badge = "🔴 RR Disabilitato (Vuoto)"
+                source_help = "Emissione RR disabilitata dall'utente. RMSSD non calcolabile su streaming."
+        else:
+            source_badge = "⚪ RR Stream (Generico)"
+            source_help = "I calcoli utilizzano i dati degli intervalli RR giunti nello stream di pacchetti."
+    else:
+        source_badge = "🟠 Calcolo BPM (Fallback)"
+        source_help = "Gli indici HRV/RMSSD sono stimati dai dati storici dei BPM in mancanza di flussi RR dedicati."
+
     m1.metric(t["fc_live"], f"{display_bpm:.0f} BPM" if pd.notna(display_bpm) else "--")
     m2.metric(t["fc_avg"], avg_val)
     m3.metric(t["fc_max"], max_val)
     m4.metric(t["fc_min"], min_val)
-    m5.metric("RMSSD", rmssd_val)
+    m5.metric("RMSSD", rmssd_val, help=source_help)
+    
+    # Banner visivo per indicare la sorgente di calcolo degli indici
+    st.markdown(
+        f"<div style='text-align: right; margin-top: -12px; margin-bottom: 12px;'>"
+        f"<span style='background-color: rgba(255,255,255,0.06); padding: 4px 10px; border-radius: 8px; font-size: 11px; color: #b0bec5; border: 1px solid rgba(255,255,255,0.1);'>"
+        f"Calcolato su: <b>{source_badge}</b></span></div>", 
+        unsafe_allow_html=True
+    )
 else:
     m1.metric(t["fc_live"], "--")
     m2.info("Avvia START REC")
