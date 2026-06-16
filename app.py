@@ -6,6 +6,11 @@ from streamlit_autorefresh import st_autorefresh
 import pytz
 import altair as alt
 import os
+import logging
+
+# configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(page_title="HR Monitor Pro", layout="wide")
@@ -61,7 +66,7 @@ LANGS = {
         "credits": "**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Informativa Privacy e Dati",
-        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token non viene archiviato.",
+        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token non viene archiviato[...]",
         "token_label": "🔑 Token Pulsoid", "win_label": "Finestra temporale (sec)"
     },
     "🇬🇧 ENG": {
@@ -128,13 +133,44 @@ def cb_stop_test(name):
             st.session_state.results[name] = {'v15': v15, 'v30': v30, 'ratio': v30/v15}
     st.session_state.active_test = None
 
-# API CALL
-def get_bpm(token):
-    if not token: return None
+# Helper: recupera token da st.secrets o da env var
+def get_token():
+    token = None
     try:
-        r = requests.get("https://dev.pulsoid.net/api/v1/data/heart_rate/latest", headers={"Authorization": f"Bearer {token}"}, timeout=1)
-        return r.json().get('data', {}).get('heart_rate') if r.status_code == 200 else None
-    except: return None
+        token = st.secrets.get("API_TOKEN") if hasattr(st, "secrets") else None
+    except Exception:
+        token = None
+    if not token:
+        token = os.getenv("API_TOKEN")
+    return token
+
+# API CALL
+def get_bpm(token=None):
+    # se token non passato prova a recuperarlo
+    if not token:
+        token = get_token()
+    if not token:
+        return None
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    try:
+        r = requests.get("https://dev.pulsoid.net/api/v1/data/heart_rate/latest", headers=headers, timeout=1)
+        debug_mode = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
+        if debug_mode:
+            logger.debug("Pulsoid GET status_code=%s", r.status_code)
+            try:
+                st.sidebar.markdown(f"**DEBUG**: last API status {r.status_code}")
+                if r.status_code == 401:
+                    st.sidebar.warning("DEBUG: API returned 401 Unauthorized (token mancante/errato).")
+            except Exception:
+                # sidebar may not be available in some contexts — ignore
+                pass
+        if r.status_code == 200:
+            return r.json().get('data', {}).get('heart_rate')
+        else:
+            return None
+    except Exception as e:
+        logger.debug("Errore chiamata API: %s", e)
+        return None
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -143,8 +179,20 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f"### 🕐 {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M:%S')}")
 
-    token = st.text_input(t["token_label"], type="password")
-    
+    # Preferisci token da secrets/env, ma permetti override temporaneo tramite input
+    token_from_cfg = get_token()
+    token_input = st.text_input(t["token_label"], type="password", value="", help="Puoi incollare qui il token per sessione. Preferibile impostare via Streamlit Secrets o API_TOKEN env var.")
+    token = token_from_cfg or (token_input if token_input else None)
+
+    if not token:
+        st.error(
+            "Token API non trovato. Impostalo in `.streamlit/secrets.toml` (chiave API_TOKEN) oppure esporta la variabile d'ambiente `API_TOKEN` per esecuzione locale.\n\n"
+            "Per Streamlit Cloud: vai su Settings -> Secrets e aggiungi `API_TOKEN = \"<il-tuo-token>\"`.\n"
+            "Per locale: export API_TOKEN=\"<il-tuo-token>\" (Linux/macOS) o setx API_TOKEN \"<il-tuo-token>\" (Windows)."
+        )
+        # Blocca l'esecuzione per evitare chiamate non-autenticate
+        st.stop()
+
     c1, c2 = st.columns(2)
     # Usa on_click invece dell'if!
     c1.button(t["start_rec"], type="primary", disabled=not token, on_click=cb_start_rec)
@@ -165,6 +213,7 @@ with st.sidebar:
 
 # --- DASHBOARD ---
 st.title(t["title"])
+# recuperiamo batteria BPM usando il token calcolato in sidebar (se presente)
 bpm = get_bpm(token)
 curr_ts = datetime.now().strftime("%H:%M:%S")
 

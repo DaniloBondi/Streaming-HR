@@ -5,7 +5,7 @@
 ![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)
 ![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)
 
-Questa applicazione web consente il monitoraggio in tempo reale della **Frequenza cardiaca (HR)** e della **Variabilità della frequenza cardiaca (HRV)** utilizzando i dati provenienti da sensori **Moofit** tramite l'ecosistema **Pulsoid** e web app customizzata **Streamlit** 
+Questa applicazione web consente il monitoraggio in tempo reale della **Frequenza cardiaca (HR)** e della **Variabilità della frequenza cardiaca (HRV)** utilizzando i dati provenienti da sensori *[...]
 
 ---
 
@@ -56,9 +56,46 @@ L'app è sviluppata in **Python** e richiede le seguenti librerie (incluse in `r
 
 ---
 
+## 🔐 Impostare il token API (Pulsoid)
+
+Questa app legge il token in questo ordine di priorità:
+
+1. Streamlit Secrets: `st.secrets['API_TOKEN']` (es. su Streamlit Cloud o file `.streamlit/secrets.toml`)
+2. Variabile d'ambiente `API_TOKEN` per esecuzione locale
+3. Campo di input nella sidebar (per override temporaneo della sessione)
+
+Esempio: creare `.streamlit/secrets.toml` con questo contenuto (NON committare token reali):
+
+````toml
+API_TOKEN = "metti-il-tuo-token-qui"
+````
+
+Streamlit Cloud:
+
+- Vai al tuo deploy su Streamlit Cloud → Settings → Secrets.
+- Aggiungi una chiave `API_TOKEN` con il valore del token.
+
+Locale:
+
+- Linux/macOS: `export API_TOKEN="il_tuo_token"`
+- Windows (PowerShell): `$env:API_TOKEN = "il_tuo_token"`
+
+Copiare il token dall'app smartphone:
+
+- Apri l'app Pulsoid sullo smartphone, copia il token (usa l'opzione "Copy" o condividi tramite canale sicuro).
+- Puoi trasferirlo tramite copia-incolla, QR code (se supportato dall'app), o inviandolo a te stesso via email sicura.
+- Evita di condividere il token in canali non sicuri o pubblici.
+
+Debug:
+
+- Per abilitare informazioni di debug leggere le chiamate API impostare la variabile d'ambiente `DEBUG=true` (mostrerà solo informazioni diagnostiche nell'interfaccia, non il valore del token).
+
+---
+
 ## 🔬 Alert
 
 ### Validità dei dati
+
 Sia il sensore che la metodica di acquisizione dati non permettono di utilizzare questi valori per scopi clinici o di ricerca; la web app è stat creata per soli scopi didattici!
 
 ---
