@@ -109,7 +109,7 @@ for key, default in {
     'test_data': pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec']),
     'markers': [], 'results': {}, 'last_ts': "",
     'use_streaming': False, 'stream_error': None,
-    'last_fetch_time': 0, 'debug_mode': False
+    'last_fetch_time': 0, 'debug_mode': False, 'last_bpm': None
 }.items():
     if key not in st.session_state: st.session_state[key] = default
 
@@ -360,6 +360,7 @@ st.title(t["title"])
 
 # --- CONTINUOUS DATA POLLING ---
 # Polling loop che raccoglie dati continuativamente quando running=True
+bpm = None  # Initialize bpm variable
 if st.session_state.running:
     current_time = time.time()
     time_since_last_fetch = current_time - st.session_state.last_fetch_time
@@ -385,6 +386,7 @@ if st.session_state.running:
             
             # Aggiungi al history se abbiamo un BPM valido
             if bpm:
+                st.session_state.last_bpm = bpm  # Store for later use
                 sec_now = len(st.session_state.history)
                 new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': bpm}])
                 st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
@@ -395,8 +397,6 @@ if st.session_state.running:
         st.session_state.last_fetch_time = current_time
         # Force refresh della pagina
         st.rerun()
-else:
-    bpm = None
 
 # Display streaming error if present
 if st.session_state.stream_error:
@@ -405,7 +405,9 @@ if st.session_state.stream_error:
 m1, m2, m3, m4 = st.columns(4)
 hist = st.session_state.history
 if not hist.empty:
-    m1.metric(t["fc_live"], f"{bpm if bpm else hist['BPM'].iloc[-1]} BPM")
+    # Use last_bpm if available, otherwise use last value from history
+    display_bpm = st.session_state.last_bpm if st.session_state.last_bpm is not None else hist['BPM'].iloc[-1]
+    m1.metric(t["fc_live"], f"{display_bpm} BPM")
     m2.metric(t["fc_avg"], f"{hist['BPM'].mean():.1f}")
     m3.metric(t["fc_max"], f"{hist['BPM'].max():.0f}")
     m4.metric(t["fc_min"], f"{hist['BPM'].min():.0f}")
