@@ -6,6 +6,11 @@ from streamlit_autorefresh import st_autorefresh
 import pytz
 import altair as alt
 import os
+import logging
+
+# configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(page_title="HR Monitor Pro", layout="wide")
@@ -137,6 +142,17 @@ def cb_stop_test(name):
             v30 = d.iloc[30]['BPM'] if len(d)>30 else d['BPM'].iloc[-1]
             st.session_state.results[name] = {'v15': v15, 'v30': v30, 'ratio': v30/v15}
     st.session_state.active_test = None
+
+# Helper: recupera token da st.secrets o da env var
+def get_token():
+    token = None
+    try:
+        token = st.secrets.get("API_TOKEN") if hasattr(st, "secrets") else None
+    except Exception:
+        token = None
+    if not token:
+        token = os.getenv("API_TOKEN")
+    return token
 
 # API CALL
 def _try_request(url, headers):
