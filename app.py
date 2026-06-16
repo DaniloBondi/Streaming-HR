@@ -98,7 +98,7 @@ LANGS = {
 }
 
 # --- COSTANTI ---
-DEFAULT_API_URL = "https://www.npoint.io/docs/5d92312f8631a8376f81"
+DEFAULT_API_URL = "https://api.npoint.io/5d92312f8631a8376f81"
 
 st_autorefresh(interval=500, key="hr_refresher")
 
@@ -109,7 +109,7 @@ for key, default in {
     'test_data': pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec']),
     'markers': [], 'results': {}, 'last_ts': "",
     'use_streaming': False, 'stream_error': None,
-    'last_fetch_time': 0
+    'last_fetch_time': 0, 'debug_mode': False
 }.items():
     if key not in st.session_state: st.session_state[key] = default
 
@@ -206,17 +206,30 @@ def update_rolling_dataframe_streaming(payload):
 def _try_request(url, headers):
     try:
         r = requests.get(url, headers=headers, timeout=1)
+        if st.session_state.debug_mode:
+            logger.info(f"[API] URL: {url} | Status: {r.status_code}")
+        
         if r.status_code == 200:
             try:
                 data = r.json()
+                if st.session_state.debug_mode:
+                    logger.info(f"[API] Response: {data}")
                 # Prova prima con 'heart_rate', poi fallback a 'bpm' per compatibilità
                 bpm_value = data.get('heart_rate') or data.get('bpm')
+                if st.session_state.debug_mode:
+                    logger.info(f"[API] Extracted BPM: {bpm_value}")
                 return bpm_value
-            except:
+            except Exception as e:
+                if st.session_state.debug_mode:
+                    logger.error(f"[API] JSON parse error: {e}")
                 return None
         else:
+            if st.session_state.debug_mode:
+                logger.error(f"[API] Bad status code: {r.status_code}")
             return None
-    except:
+    except Exception as e:
+        if st.session_state.debug_mode:
+            logger.error(f"[API] Request failed: {e}")
         return None
 
 def get_bpm(api_url, auth_method="Auto", custom_header_name="X-API-KEY", token=None):
@@ -225,12 +238,16 @@ def get_bpm(api_url, auth_method="Auto", custom_header_name="X-API-KEY", token=N
     Token is optional and only used if auth_method is not 'Auto' or if needed.
     """
     if not api_url:
+        if st.session_state.debug_mode:
+            logger.warning("[get_bpm] No API URL provided")
         return None
     
     url = api_url.strip()
     
     # Se non c'è token e auth_method non è 'Auto', ritorna None
     if not token and auth_method != "Auto":
+        if st.session_state.debug_mode:
+            logger.warning("[get_bpm] No token and auth_method is not Auto")
         return None
     
     # Se token è presente, usalo
@@ -262,6 +279,8 @@ def get_bpm(api_url, auth_method="Auto", custom_header_name="X-API-KEY", token=N
     else:
         # No token: request senza header di autenticazione
         headers = {}
+        if st.session_state.debug_mode:
+            logger.info(f"[get_bpm] Fetching from {url} with no auth headers")
         return _try_request(url, headers)
 
 # --- SIDEBAR ---
@@ -270,6 +289,9 @@ with st.sidebar:
     t = LANGS[lang]
     st.markdown("---")
     st.markdown(f"### 🕐 {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M:%S')}")
+
+    # --- DEBUG MODE ---
+    st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=False)
 
     # --- STREAMING MODE TOGGLE ---
     st.session_state.use_streaming = st.checkbox(t["stream_mode"], value=False)
@@ -289,6 +311,9 @@ with st.sidebar:
         # L'utente può inserire un URL personalizzato, altrimenti usa il default
         api_url_custom = st.text_input(t["api_label"], value="").strip()
         api_url_effective = api_url_custom if api_url_custom else DEFAULT_API_URL
+        
+        # Mostra URL attivo
+        st.caption(f"📍 URL attivo: `{api_url_effective}`")
         
         # Token opzionale
         token = st.text_input(t["token_label"], type="password", value="")
@@ -354,6 +379,9 @@ if st.session_state.running:
         else:
             # Non-streaming: usa api_url_effective (default o custom)
             bpm = get_bpm(api_url_effective, auth_method, custom_header_name, token)
+            
+            if st.session_state.debug_mode:
+                logger.info(f"[POLL] Fetched BPM: {bpm}")
             
             # Aggiungi al history se abbiamo un BPM valido
             if bpm:
