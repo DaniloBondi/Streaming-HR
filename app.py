@@ -8,7 +8,7 @@ import altair as alt
 import os
 import logging
 import time
-import numpy as np  # Aggiunto per calcoli matematici e RMSSD
+import numpy as np
 
 # configure logging
 logging.basicConfig(level=logging.INFO)
@@ -103,6 +103,7 @@ LANGS = {
 # --- COSTANTI ---
 DEFAULT_API_URL = "https://api.npoint.io/5d92312f8631a8376f81"
 
+# Aggiornamento UI rapido (500ms) indipendente dall'arrivo dei dati di rete
 st_autorefresh(interval=500, key="hr_refresher")
 
 # --- STATO DELLA SESSIONE ---
@@ -113,8 +114,11 @@ for key, default in {
     'markers': [], 'results': {}, 'last_ts': None,
     'use_streaming': False, 'stream_error': None,
     'last_fetch_time': 0, 'debug_mode': False, 'last_bpm': None,
-    'rr_history': [],         # Registro lineare globale degli intervalli RR
-    'test_rr_history': []     # Registro degli intervalli RR per il test attivo
+    'rr_history': [],          # Registro lineare globale degli intervalli RR
+    'test_rr_history': [],     # Registro degli intervalli RR per il test attivo
+    'rec_start_time': None,    # Timestamp inizio registrazione globale
+    'test_start_time': None,   # Timestamp inizio test specifico
+    'last_valid_packet_time': 0 # Ultima volta in cui abbiamo ricevuto un pacchetto NUOVO
 }.items():
     if key not in st.session_state: st.session_state[key] = default
 
@@ -153,6 +157,8 @@ def cb_start_rec():
     st.session_state.rr_history = []
     st.session_state.last_ts = None
     st.session_state.last_bpm = None
+    st.session_state.rec_start_time = time.time()
+    st.session_state.last_valid_packet_time = time.time()
 
 def cb_stop_rec():
     st.session_state.running, st.session_state.active_test = False, None
@@ -165,23 +171,31 @@ def cb_reset():
     st.session_state.test_rr_history = []
     st.session_state.last_ts = None
     st.session_state.last_bpm = None
+    st.session_state.rec_start_time = None
+    st.session_state.test_start_time = None
+    st.session_state.last_valid_packet_time = 0
 
 def cb_start_test(name):
     st.session_state.active_test, st.session_state.freeze_view = name, False
     st.session_state.test_data = pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec'])
     st.session_state.test_rr_history = []
-    st.session_state.markers.append(len(st.session_state.history))
+    
+    # Il marker verticale sul grafico deve corrispondere ai secondi reali della registrazione
+    sec_now = int(time.time() - st.session_state.rec_start_time) if st.session_state.rec_start_time else 0
+    st.session_state.markers.append(sec_now)
+    st.session_state.test_start_time = time.time()
 
 def cb_stop_test(name):
-    # Verifica la durata complessiva basandosi sulla somma degli RR raccolti (30 secondi = 30000ms)
+    # Verifica la durata complessiva basandosi sul tempo reale trascorso e sugli RR
+    durata_reale_sec = time.time() - st.session_state.test_start_time if st.session_state.test_start_time else 0
     durata_test_ms = sum(st.session_state.test_rr_history)
     
-    if durata_test_ms < 30000 and len(st.session_state.test_data) < 30:
+    # Se il test è durato meno di 30 secondi reali o non ci sono abbastanza dati
+    if durata_reale_sec < 30 and durata_test_ms < 30000:
         st.session_state.results[name] = "error"
     else:
         st.session_state.freeze_view = True
         if name in ["res", "val"]:
-            # Calcolo dei parametri direttamente sugli intervalli RR registrati nel test
             test_bpms = [60000.0 / rr for rr in st.session_state.test_rr_history if rr > 0]
             t_max = max(test_bpms) if test_bpms else 0
             t_min = min(test_bpms) if test_bpms else 0
@@ -190,14 +204,12 @@ def cb_stop_test(name):
                 'ratio': t_max / t_min if t_min > 0 else 0
             }
         else:
-            # Tilt test / Active Standing (Rapporto 30:15 basato sulla temporizzazione dei battiti RR)
             cum_times = np.cumsum(st.session_state.test_rr_history)
-            # Trova l'indice del battito più vicino al 15° secondo (15000ms) e al 30° secondo (30000ms)
             idx_15 = (np.abs(cum_times - 15000)).argmin()
             idx_30 = (np.abs(cum_times - 30000)).argmin()
             
-            rr_15 = st.session_state.test_rr_history[idx_15] if idx_15 < len(st.session_state.test_rr_history) else st.session_state.test_rr_history[-1]
-            rr_30 = st.session_state.test_rr_history[idx_30] if idx_30 < len(st.session_state.test_rr_history) else st.session_state.test_rr_history[-1]
+            rr_15 = st.session_state.test_rr_history[idx_15] if idx_15 < len(st.session_state.test_rr_history) else st.session_state.test_rr_history[-1] if st.session_state.test_rr_history else 0
+            rr_30 = st.session_state.test_rr_history[idx_30] if idx_30 < len(st.session_state.test_rr_history) else st.session_state.test_rr_history[-1] if st.session_state.test_rr_history else 0
             
             v15 = 60000.0 / rr_15 if rr_15 > 0 else 0
             v30 = 60000.0 / rr_30 if rr_30 > 0 else 0
@@ -221,7 +233,7 @@ def fetch_vitals_data_streaming(device_ip, device_port, stream_token, timeout=1.
     except Exception as ex:
         return None, f"⚠️ Error: {str(ex)}"
 
-# API CALL (Ritorna l'intero dizionario JSON per elaborare timestamp e RR grezzi)
+# API CALL
 def _try_request(url, headers):
     try:
         r = requests.get(url, headers=headers, timeout=1)
@@ -308,7 +320,7 @@ with st.sidebar:
     win = st.slider(t["win_label"], 10, 300, 60)
     st.button("🗑 Reset", use_container_width=True, on_click=cb_reset)
 
-    # --- METRICHE SIDEBAR (RICHIESTA UTENTE) ---
+    # --- METRICHE SIDEBAR ---
     st.markdown("---")
     st.markdown(f"### {t['stats_rr']}")
     metrics_globali = calcola_metriche_rr(st.session_state.rr_history)
@@ -347,53 +359,73 @@ if st.session_state.running:
         else:
             payload = get_bpm(api_url_effective, auth_method, custom_header_name, token)
             
-        sec_now = len(st.session_state.history)
+        # Calcoliamo i secondi reali trascorsi dall'inizio del record usando l'orologio interno
+        sec_now = int(time.time() - st.session_state.rec_start_time) if st.session_state.rec_start_time else 0
         
         if payload:
             ts = payload.get("timestamp")
             bpm = payload.get("heart_rate") or payload.get("bpm")
             rr_intervals = payload.get("rr_intervals", [])
             
-            # SE IL TIMESTAMP NON CAMBIA = STREAMING BLOCCATO -> INSERISCI UN BUCO (NaN)
+            # SE IL TIMESTAMP NON CAMBIA = il telefono non ha ancora inviato un nuovo pacchetto
             if st.session_state.last_ts is not None and st.session_state.last_ts == ts:
-                new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': float('nan')}])
-                st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
-                st.session_state.last_bpm = None
+                # SE PASSA TROPPO TEMPO (Es: > 15s) significa che lo streaming è interrotto. Mettiamo un NaN.
+                if time.time() - st.session_state.last_valid_packet_time > 15:
+                    if st.session_state.history.empty or st.session_state.history.iloc[-1]['Sec'] != sec_now:
+                        new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': float('nan')}])
+                        st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
+                    st.session_state.last_bpm = None
+                else:
+                    # Altrimenti semplicemente NON facciamo nulla, aspettiamo il prossimo pacchetto senza inquinare di NaN
+                    pass
             else:
-                # NUOVO PACCHETTO VALIDO
+                # NUOVO PACCHETTO VALIDO ARRIVATO!
                 st.session_state.last_ts = ts
+                st.session_state.last_valid_packet_time = time.time()
                 if bpm:
                     st.session_state.last_bpm = bpm
                     new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': bpm}])
                     st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
                     
                     if st.session_state.active_test:
-                        st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': len(st.session_state.test_data), 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
+                        t_elapsed = int(time.time() - st.session_state.test_start_time)
+                        st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': t_elapsed, 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
                 
                 if rr_intervals:
                     st.session_state.rr_history.extend(rr_intervals)
                     if st.session_state.active_test:
                         st.session_state.test_rr_history.extend(rr_intervals)
         else:
-            # RICHIESTA FALLITA / NO LIVE DATA -> INSERISCI UN BUCO (NaN)
-            new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': float('nan')}])
-            st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
-            st.session_state.last_bpm = None
-            
+            # RICHIESTA FALLITA (ERRORE DI RETE) -> Metti NaN solo in caso di timeout prolungato
+            if time.time() - st.session_state.last_valid_packet_time > 15:
+                if st.session_state.history.empty or st.session_state.history.iloc[-1]['Sec'] != sec_now:
+                    new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': float('nan')}])
+                    st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
+                st.session_state.last_bpm = None
+                
         st.session_state.last_fetch_time = current_time
         st.rerun()
 
 if st.session_state.stream_error:
     st.warning(st.session_state.stream_error)
 
-# --- VISUALIZZAZIONE METRICHE SUL PANNELLO (Calcolate su RR) ---
+# --- VISUALIZZAZIONE TIMER TEST CLINICI (Sincronizzato al secondo reale) ---
+if st.session_state.active_test and st.session_state.test_start_time:
+    elapsed = int(time.time() - st.session_state.test_start_time)
+    if st.session_state.active_test == "res":
+        cycle_time = elapsed % 10
+        phase_text, sec_left = (t["inspira"], 5 - cycle_time) if cycle_time < 5 else (t["espira"], 10 - cycle_time)
+        st.markdown(f"<div class='timer-box'>{phase_text} ({sec_left}s)<br><span class='timer-small'>⏱️ TOT: {elapsed}s</span></div>", unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div class='timer-box'>⏱️ TEST: {elapsed}s</div>", unsafe_allow_html=True)
+
+# --- VISUALIZZAZIONE METRICHE SUL PANNELLO ---
 m1, m2, m3, m4, m5 = st.columns(5)
 hist = st.session_state.history
 
 if not hist.empty:
     display_bpm = st.session_state.last_bpm if st.session_state.last_bpm is not None else float('nan')
     
-    # Se abbiamo intervalli RR registrati, usiamo quelli per le statistiche globali
     if st.session_state.rr_history:
         metrics_globali = calcola_metriche_rr(st.session_state.rr_history)
         avg_val = f"{metrics_globali['mean']:.1f}"
@@ -401,7 +433,6 @@ if not hist.empty:
         min_val = f"{metrics_globali['min']:.0f}"
         rmssd_val = f"{metrics_globali['rmssd']:.1f} ms"
     else:
-        # Fallback se non ci sono ancora RR salvati
         valid_bpms = hist['BPM'].dropna()
         avg_val = f"{valid_bpms.mean():.1f}" if not valid_bpms.empty else "--"
         max_val = f"{valid_bpms.max():.0f}" if not valid_bpms.empty else "--"
@@ -417,20 +448,15 @@ else:
     m1.metric(t["fc_live"], "--")
     m2.info("Avvia START REC")
 
-if st.session_state.active_test:
-    elapsed = len(st.session_state.test_data)
-    if st.session_state.active_test == "res":
-        cycle_time = elapsed % 10
-        phase_text, sec_left = (t["inspira"], 5 - cycle_time) if cycle_time < 5 else (t["espira"], 10 - cycle_time)
-        st.markdown(f"<div class='timer-box'>{phase_text} ({sec_left}s)<br><span class='timer-small'>⏱️ TOT: {elapsed}s</span></div>", unsafe_allow_html=True)
-    else:
-        st.markdown(f"<div class='timer-box'>⏱️ TEST: {elapsed}s</div>", unsafe_allow_html=True)
-
-# --- GRAFICO CON SUPPORTO PER I BUCHI (Altair ignora i NaN spezzando la linea) ---
+# --- GRAFICO TEMPORALE ---
 if not hist.empty:
-    df_plot = hist[(hist['Sec'] >= st.session_state.test_data['G_Sec'].min()-2) & (hist['Sec'] <= st.session_state.test_data['G_Sec'].max()+2)] if st.session_state.freeze_view else hist.tail(win)
+    if st.session_state.freeze_view and not st.session_state.test_data.empty:
+        df_plot = hist[(hist['Sec'] >= st.session_state.test_data['G_Sec'].min()-2) & (hist['Sec'] <= st.session_state.test_data['G_Sec'].max()+2)]
+    else:
+        # Filtra la finestra temporale reale basandoti sul valore della colonna 'Sec'
+        max_sec = hist['Sec'].max()
+        df_plot = hist[hist['Sec'] >= (max_sec - win)]
     
-    # Range dinamico dell'asse Y per evitare crash se ci sono NaN
     valid_plot_bpms = df_plot['BPM'].dropna()
     y_min = valid_plot_bpms.min() - 5 if not valid_plot_bpms.empty else 40
     y_max = valid_plot_bpms.max() + 5 if not valid_plot_bpms.empty else 100
