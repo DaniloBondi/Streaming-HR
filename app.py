@@ -8,6 +8,7 @@ import altair as alt
 import os
 import logging
 import time
+import numpy as np  # Aggiunto per calcoli matematici e RMSSD
 
 # configure logging
 logging.basicConfig(level=logging.INFO)
@@ -72,7 +73,8 @@ LANGS = {
         "api_label": "🔗 API URL (lasciare vuoto per default)",
         "auth_label": "Metodo Auth",
         "custom_header_label": "Nome header custom",
-        "stream_mode": "Modalità Streaming"
+        "stream_mode": "Modalità Streaming",
+        "stats_rr": "📊 Statistiche Sessione (da RR)"
     },
     "🇬🇧 ENG": {
         "title": "📊❤️ Live HR Monitoring",
@@ -93,7 +95,8 @@ LANGS = {
         "api_label": "🔗 API URL (leave empty for default)",
         "auth_label": "Auth method",
         "custom_header_label": "Custom header name",
-        "stream_mode": "Streaming Mode"
+        "stream_mode": "Streaming Mode",
+        "stats_rr": "📊 Session Stats (from RR)"
     }
 }
 
@@ -107,25 +110,49 @@ for key, default in {
     'history': pd.DataFrame(columns=['Sec', 'BPM']), 'running': False,
     'active_test': None, 'freeze_view': False,
     'test_data': pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec']),
-    'markers': [], 'results': {}, 'last_ts': "",
+    'markers': [], 'results': {}, 'last_ts': None,
     'use_streaming': False, 'stream_error': None,
-    'last_fetch_time': 0, 'debug_mode': False, 'last_bpm': None
+    'last_fetch_time': 0, 'debug_mode': False, 'last_bpm': None,
+    'rr_history': [],         # Registro lineare globale degli intervalli RR
+    'test_rr_history': []     # Registro degli intervalli RR per il test attivo
 }.items():
     if key not in st.session_state: st.session_state[key] = default
 
-# --- FUNZIONI CALLBACK (Rendono i tasti istantanei) ---
+# --- FUNZIONI UTILI DI CALCOLO RR ---
+def calcola_metriche_rr(rr_list):
+    """Calcola parametri statistici e RMSSD partendo da una lista di intervalli RR in ms"""
+    if not rr_list or len(rr_list) == 0:
+        return {"max": 0, "min": 0, "mean": 0, "rmssd": 0}
+    
+    # Conversione intervalli RR (ms) in valori di Frequenza Cardiaca istantanea (BPM)
+    bpms = [60000.0 / rr for rr in rr_list if rr > 0]
+    
+    rmssd = 0.0
+    if len(rr_list) > 1:
+        diffs = np.diff(rr_list)
+        rmssd = np.sqrt(np.mean(diffs ** 2))
+        
+    return {
+        "max": max(bpms) if bpms else 0,
+        "min": min(bpms) if bpms else 0,
+        "mean": np.mean(bpms) if bpms else 0,
+        "rmssd": rmssd
+    }
+
+# --- FUNZIONI CALLBACK ---
 def cb_start_rec():
-    # impedisci start se api mancante (nel caso di streaming, device_ip/token)
     if st.session_state.use_streaming:
         if not device_ip or not stream_token:
             st.warning("Device IP o Streaming Token mancanti.")
             return
     else:
-        # Nel caso non-streaming, non richiedere token (sarà None)
         if not api_url_effective:
             st.warning("API URL mancante.")
             return
     st.session_state.running, st.session_state.freeze_view = True, False
+    st.session_state.rr_history = []
+    st.session_state.last_ts = None
+    st.session_state.last_bpm = None
 
 def cb_stop_rec():
     st.session_state.running, st.session_state.active_test = False, None
@@ -134,43 +161,52 @@ def cb_reset():
     st.session_state.history = pd.DataFrame(columns=['Sec', 'BPM'])
     st.session_state.markers, st.session_state.results = [], {}
     st.session_state.freeze_view, st.session_state.running, st.session_state.active_test = False, False, None
+    st.session_state.rr_history = []
+    st.session_state.test_rr_history = []
+    st.session_state.last_ts = None
+    st.session_state.last_bpm = None
 
 def cb_start_test(name):
     st.session_state.active_test, st.session_state.freeze_view = name, False
     st.session_state.test_data = pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec'])
+    st.session_state.test_rr_history = []
     st.session_state.markers.append(len(st.session_state.history))
 
 def cb_stop_test(name):
-    if len(st.session_state.test_data) < 30:
+    # Verifica la durata complessiva basandosi sulla somma degli RR raccolti (30 secondi = 30000ms)
+    durata_test_ms = sum(st.session_state.test_rr_history)
+    
+    if durata_test_ms < 30000 and len(st.session_state.test_data) < 30:
         st.session_state.results[name] = "error"
     else:
-        d = st.session_state.test_data
         st.session_state.freeze_view = True
         if name in ["res", "val"]:
+            # Calcolo dei parametri direttamente sugli intervalli RR registrati nel test
+            test_bpms = [60000.0 / rr for rr in st.session_state.test_rr_history if rr > 0]
+            t_max = max(test_bpms) if test_bpms else 0
+            t_min = min(test_bpms) if test_bpms else 0
             st.session_state.results[name] = {
-                'max': d['BPM'].max(), 'min': d['BPM'].min(), 'diff': d['BPM'].max() - d['BPM'].min(),
-                'ratio': d['BPM'].max() / d['BPM'].min() if d['BPM'].min() > 0 else 0
+                'max': t_max, 'min': t_min, 'diff': t_max - t_min,
+                'ratio': t_max / t_min if t_min > 0 else 0
             }
         else:
-            v15 = d.iloc[15]['BPM'] if len(d)>15 else d['BPM'].iloc[-1]
-            v30 = d.iloc[30]['BPM'] if len(d)>30 else d['BPM'].iloc[-1]
-            st.session_state.results[name] = {'v15': v15, 'v30': v30, 'ratio': v30/v15}
+            # Tilt test / Active Standing (Rapporto 30:15 basato sulla temporizzazione dei battiti RR)
+            cum_times = np.cumsum(st.session_state.test_rr_history)
+            # Trova l'indice del battito più vicino al 15° secondo (15000ms) e al 30° secondo (30000ms)
+            idx_15 = (np.abs(cum_times - 15000)).argmin()
+            idx_30 = (np.abs(cum_times - 30000)).argmin()
+            
+            rr_15 = st.session_state.test_rr_history[idx_15] if idx_15 < len(st.session_state.test_rr_history) else st.session_state.test_rr_history[-1]
+            rr_30 = st.session_state.test_rr_history[idx_30] if idx_30 < len(st.session_state.test_rr_history) else st.session_state.test_rr_history[-1]
+            
+            v15 = 60000.0 / rr_15 if rr_15 > 0 else 0
+            v30 = 60000.0 / rr_30 if rr_30 > 0 else 0
+            st.session_state.results[name] = {'v15': v15, 'v30': v30, 'ratio': v30 / v15 if v15 > 0 else 0}
+            
     st.session_state.active_test = None
-
-# Helper: recupera token da st.secrets o da env var
-def get_token():
-    token = None
-    try:
-        token = st.secrets.get("API_TOKEN") if hasattr(st, "secrets") else None
-    except Exception:
-        token = None
-    if not token:
-        token = os.getenv("API_TOKEN")
-    return token
 
 # --- STREAMING DATA RETRIEVAL WITH IMPROVED ERROR HANDLING ---
 def fetch_vitals_data_streaming(device_ip, device_port, stream_token, timeout=1.5):
-    """Fetch vital signs from the mobile device endpoint using streaming procedure"""
     try:
         endpoint = f"http://{device_ip}:{device_port}/vitals?token={stream_token}"
         res = requests.get(endpoint, timeout=timeout)
@@ -185,40 +221,18 @@ def fetch_vitals_data_streaming(device_ip, device_port, stream_token, timeout=1.
     except Exception as ex:
         return None, f"⚠️ Error: {str(ex)}"
 
-def update_rolling_dataframe_streaming(payload):
-    """Update the rolling BPM dataframe with new data from streaming"""
-    bpm = payload.get("bpm", 0)
-    now_str = datetime.now().strftime("%H:%M:%S")
-    
-    if bpm > 0:
-        sec_now = len(st.session_state.history)
-        new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': bpm}])
-        st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True).tail(100)
-    
-    # Sync rolling list from remote cache on startup
-    if len(st.session_state.history) <= 1 and len(payload.get("bpm_history", [])) > 0:
-        remote_pts = []
-        for idx, pt in enumerate(payload["bpm_history"]):
-            remote_pts.append({"Sec": idx, "BPM": pt.get("BPM", pt.get("bpm", 0))})
-        st.session_state.history = pd.DataFrame(remote_pts)
-
-# API CALL (Original method for compatibility)
+# API CALL (Ritorna l'intero dizionario JSON per elaborare timestamp e RR grezzi)
 def _try_request(url, headers):
     try:
         r = requests.get(url, headers=headers, timeout=1)
         if st.session_state.debug_mode:
             logger.info(f"[API] URL: {url} | Status: {r.status_code}")
-        
         if r.status_code == 200:
             try:
                 data = r.json()
                 if st.session_state.debug_mode:
                     logger.info(f"[API] Response: {data}")
-                # Prova prima con 'heart_rate', poi fallback a 'bpm' per compatibilità
-                bpm_value = data.get('heart_rate') or data.get('bpm')
-                if st.session_state.debug_mode:
-                    logger.info(f"[API] Extracted BPM: {bpm_value}")
-                return bpm_value
+                return data
             except Exception as e:
                 if st.session_state.debug_mode:
                     logger.error(f"[API] JSON parse error: {e}")
@@ -233,55 +247,26 @@ def _try_request(url, headers):
         return None
 
 def get_bpm(api_url, auth_method="Auto", custom_header_name="X-API-KEY", token=None):
-    """
-    Fetch BPM from API URL without requiring token.
-    Token is optional and only used if auth_method is not 'Auto' or if needed.
-    """
     if not api_url:
-        if st.session_state.debug_mode:
-            logger.warning("[get_bpm] No API URL provided")
         return None
-    
     url = api_url.strip()
-    
-    # Se non c'è token e auth_method non è 'Auto', ritorna None
     if not token and auth_method != "Auto":
-        if st.session_state.debug_mode:
-            logger.warning("[get_bpm] No token and auth_method is not Auto")
         return None
     
-    # Se token è presente, usalo
     if token:
         if auth_method == "Auto":
-            # prova Bearer -> Token -> X-API-Key
-            headers = {"Authorization": f"Bearer {token}"}
-            v = _try_request(url, headers)
-            if v is not None: return v
-            headers = {"Authorization": f"Token {token}"}
-            v = _try_request(url, headers)
-            if v is not None: return v
-            headers = {"X-API-Key": token}
-            v = _try_request(url, headers)
-            if v is not None: return v
-            # ultima prova custom header default
-            headers = {custom_header_name: token}
-            return _try_request(url, headers)
+            for h in [{"Authorization": f"Bearer {token}"}, {"Authorization": f"Token {token}"}, {"X-API-Key": token}, {custom_header_name: token}]:
+                v = _try_request(url, h)
+                if v is not None: return v
+            return None
         else:
-            if auth_method == "Bearer":
-                headers = {"Authorization": f"Bearer {token}"}
-            elif auth_method == "Token":
-                headers = {"Authorization": f"Token {token}"}
-            elif auth_method == "X-API-Key":
-                headers = {"X-API-Key": token}
-            else:
-                headers = {custom_header_name: token}
+            if auth_method == "Bearer": headers = {"Authorization": f"Bearer {token}"}
+            elif auth_method == "Token": headers = {"Authorization": f"Token {token}"}
+            elif auth_method == "X-API-Key": headers = {"X-API-Key": token}
+            else: headers = {custom_header_name: token}
             return _try_request(url, headers)
     else:
-        # No token: request senza header di autenticazione
-        headers = {}
-        if st.session_state.debug_mode:
-            logger.info(f"[get_bpm] Fetching from {url} with no auth headers")
-        return _try_request(url, headers)
+        return _try_request(url, {})
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -290,10 +275,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f"### 🕐 {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M:%S')}")
 
-    # --- DEBUG MODE ---
     st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=False)
-
-    # --- STREAMING MODE TOGGLE ---
     st.session_state.use_streaming = st.checkbox(t["stream_mode"], value=False)
     
     if st.session_state.use_streaming:
@@ -302,35 +284,19 @@ with st.sidebar:
         device_port = st.number_input("Server Port", value=8080, step=1)
         stream_token = st.text_input("Streamer Security Token", type="password", value="VITAL-66A51AC5")
         poll_interval = st.slider("Sampling Interval (sec)", 0.2, 5.0, 1.0, 0.1)
-        token = None
-        api_url = None
-        api_url_effective = None
-        custom_header_name = ""
+        token = api_url = api_url_effective = custom_header_name = None
     else:
         st.markdown("### 🔧 API Settings")
-        # L'utente può inserire un URL personalizzato, altrimenti usa il default
         api_url_custom = st.text_input(t["api_label"], value="").strip()
         api_url_effective = api_url_custom if api_url_custom else DEFAULT_API_URL
+        token = st.text_input(t["token_label"], type="password", value="").strip() or None
         
-        # Token opzionale
-        token = st.text_input(t["token_label"], type="password", value="")
-        token = token.strip() if token else None
-        
-        # Auth method solo se token fornito
         if token:
             auth_method = st.selectbox(t["auth_label"], ["Auto", "Bearer", "Token", "X-API-Key", "Custom header"], index=0)
-            custom_header_name = ""
-            if auth_method == "Custom header":
-                custom_header_name = st.text_input(t["custom_header_label"], value="X-My-App-Token")
+            custom_header_name = st.text_input(t["custom_header_label"], value="X-My-App-Token") if auth_method == "Custom header" else ""
         else:
-            auth_method = "Auto"
-            custom_header_name = ""
-        
-        api_url = api_url_custom  # Usa custom solo se fornito esplicitamente
-        device_ip = None
-        device_port = None
-        stream_token = None
-        poll_interval = 1.0
+            auth_method, custom_header_name = "Auto", ""
+        api_url, device_ip, device_port, stream_token, poll_interval = api_url_custom, None, None, None, 1.0
     
     c1, c2 = st.columns(2)
     if st.session_state.use_streaming:
@@ -342,6 +308,17 @@ with st.sidebar:
     win = st.slider(t["win_label"], 10, 300, 60)
     st.button("🗑 Reset", use_container_width=True, on_click=cb_reset)
 
+    # --- METRICHE SIDEBAR (RICHIESTA UTENTE) ---
+    st.markdown("---")
+    st.markdown(f"### {t['stats_rr']}")
+    metrics_globali = calcola_metriche_rr(st.session_state.rr_history)
+    if st.session_state.rr_history:
+        st.metric(t["fc_max"], f"{metrics_globali['max']:.0f} BPM")
+        st.metric(t["fc_min"], f"{metrics_globali['min']:.0f} BPM")
+        st.metric("RMSSD", f"{metrics_globali['rmssd']:.1f} ms")
+    else:
+        st.caption("Nessun dato RR registrato.")
+
     st.markdown("---")
     st.caption(t["credits"])
     lc1, lc2 = st.columns(2)
@@ -352,62 +329,90 @@ with st.sidebar:
     st.caption(t["creator"])
     with st.expander(t["privacy_title"]): st.markdown(f"<small>{t['privacy_text']}</small>", unsafe_allow_html=True)
 
-# --- DASHBOARD ---
+# --- DASHBOARD PRINCIPALE ---
 st.title(t["title"])
 
-# --- CONTINUOUS DATA POLLING ---
-# Polling loop che raccoglie dati continuativamente quando running=True
-bpm = None  # Initialize bpm variable
+# --- CONTINUOUS DATA POLLING & GAPS MANAGEMENT ---
 if st.session_state.running:
     current_time = time.time()
-    time_since_last_fetch = current_time - st.session_state.last_fetch_time
-    
-    # Fetch solo se è passato abbastanza tempo (basato su poll_interval)
-    if time_since_last_fetch >= poll_interval:
+    if current_time - st.session_state.last_fetch_time >= poll_interval:
+        payload = None
         if st.session_state.use_streaming:
             payload, error = fetch_vitals_data_streaming(device_ip, device_port, stream_token)
             if error:
                 st.session_state.stream_error = error
-                bpm = None
+                payload = None
             else:
                 st.session_state.stream_error = None
-                bpm = payload.get("bpm", 0) if payload else None
-                if payload and bpm and bpm > 0:
-                    update_rolling_dataframe_streaming(payload)
         else:
-            # Non-streaming: usa api_url_effective (default o custom)
-            bpm = get_bpm(api_url_effective, auth_method, custom_header_name, token)
+            payload = get_bpm(api_url_effective, auth_method, custom_header_name, token)
             
-            if st.session_state.debug_mode:
-                logger.info(f"[POLL] Fetched BPM: {bpm}")
-            
-            # Aggiungi al history se abbiamo un BPM valido
-            if bpm:
-                st.session_state.last_bpm = bpm  # Store for later use
-                sec_now = len(st.session_state.history)
-                new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': bpm}])
-                st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
-                
-                if st.session_state.active_test:
-                    st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': len(st.session_state.test_data), 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
+        sec_now = len(st.session_state.history)
         
+        if payload:
+            ts = payload.get("timestamp")
+            bpm = payload.get("heart_rate") or payload.get("bpm")
+            rr_intervals = payload.get("rr_intervals", [])
+            
+            # SE IL TIMESTAMP NON CAMBIA = STREAMING BLOCCATO -> INSERISCI UN BUCO (NaN)
+            if st.session_state.last_ts is not None and st.session_state.last_ts == ts:
+                new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': float('nan')}])
+                st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
+                st.session_state.last_bpm = None
+            else:
+                # NUOVO PACCHETTO VALIDO
+                st.session_state.last_ts = ts
+                if bpm:
+                    st.session_state.last_bpm = bpm
+                    new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': bpm}])
+                    st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
+                    
+                    if st.session_state.active_test:
+                        st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': len(st.session_state.test_data), 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
+                
+                if rr_intervals:
+                    st.session_state.rr_history.extend(rr_intervals)
+                    if st.session_state.active_test:
+                        st.session_state.test_rr_history.extend(rr_intervals)
+        else:
+            # RICHIESTA FALLITA / NO LIVE DATA -> INSERISCI UN BUCO (NaN)
+            new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': float('nan')}])
+            st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
+            st.session_state.last_bpm = None
+            
         st.session_state.last_fetch_time = current_time
-        # Force refresh della pagina
         st.rerun()
 
-# Display streaming error if present
 if st.session_state.stream_error:
     st.warning(st.session_state.stream_error)
 
-m1, m2, m3, m4 = st.columns(4)
+# --- VISUALIZZAZIONE METRICHE SUL PANNELLO (Calcolate su RR) ---
+m1, m2, m3, m4, m5 = st.columns(5)
 hist = st.session_state.history
+
 if not hist.empty:
-    # Use last_bpm if available, otherwise use last value from history
-    display_bpm = st.session_state.last_bpm if st.session_state.last_bpm is not None else hist['BPM'].iloc[-1]
-    m1.metric(t["fc_live"], f"{display_bpm} BPM")
-    m2.metric(t["fc_avg"], f"{hist['BPM'].mean():.1f}")
-    m3.metric(t["fc_max"], f"{hist['BPM'].max():.0f}")
-    m4.metric(t["fc_min"], f"{hist['BPM'].min():.0f}")
+    display_bpm = st.session_state.last_bpm if st.session_state.last_bpm is not None else float('nan')
+    
+    # Se abbiamo intervalli RR registrati, usiamo quelli per le statistiche globali
+    if st.session_state.rr_history:
+        metrics_globali = calcola_metriche_rr(st.session_state.rr_history)
+        avg_val = f"{metrics_globali['mean']:.1f}"
+        max_val = f"{metrics_globali['max']:.0f}"
+        min_val = f"{metrics_globali['min']:.0f}"
+        rmssd_val = f"{metrics_globali['rmssd']:.1f} ms"
+    else:
+        # Fallback se non ci sono ancora RR salvati
+        valid_bpms = hist['BPM'].dropna()
+        avg_val = f"{valid_bpms.mean():.1f}" if not valid_bpms.empty else "--"
+        max_val = f"{valid_bpms.max():.0f}" if not valid_bpms.empty else "--"
+        min_val = f"{valid_bpms.min():.0f}" if not valid_bpms.empty else "--"
+        rmssd_val = "--"
+        
+    m1.metric(t["fc_live"], f"{display_bpm:.0f} BPM" if pd.notna(display_bpm) else "--")
+    m2.metric(t["fc_avg"], avg_val)
+    m3.metric(t["fc_max"], max_val)
+    m4.metric(t["fc_min"], min_val)
+    m5.metric("RMSSD", rmssd_val)
 else:
     m1.metric(t["fc_live"], "--")
     m2.info("Avvia START REC")
@@ -421,28 +426,33 @@ if st.session_state.active_test:
     else:
         st.markdown(f"<div class='timer-box'>⏱️ TEST: {elapsed}s</div>", unsafe_allow_html=True)
 
+# --- GRAFICO CON SUPPORTO PER I BUCHI (Altair ignora i NaN spezzando la linea) ---
 if not hist.empty:
     df_plot = hist[(hist['Sec'] >= st.session_state.test_data['G_Sec'].min()-2) & (hist['Sec'] <= st.session_state.test_data['G_Sec'].max()+2)] if st.session_state.freeze_view else hist.tail(win)
+    
+    # Range dinamico dell'asse Y per evitare crash se ci sono NaN
+    valid_plot_bpms = df_plot['BPM'].dropna()
+    y_min = valid_plot_bpms.min() - 5 if not valid_plot_bpms.empty else 40
+    y_max = valid_plot_bpms.max() + 5 if not valid_plot_bpms.empty else 100
+
     line = alt.Chart(df_plot).mark_line(color='#ff4b4b', interpolate='monotone', size=3).encode(
         x=alt.X('Sec:Q', title="Secondi", scale=alt.Scale(nice=False)),
-        y=alt.Y('BPM:Q', title="BPM", scale=alt.Scale(domain=[hist['BPM'].min()-5, hist['BPM'].max()+5]))
+        y=alt.Y('BPM:Q', title="BPM", scale=alt.Scale(domain=[y_min, y_max]))
     )
     layers = [line]
     if st.session_state.markers:
         layers.append(alt.Chart(pd.DataFrame({'Sec': st.session_state.markers})).mark_rule(color='#00e5ff', strokeDash=[5,5]).encode(x='Sec:Q'))
     st.altair_chart(alt.layer(*layers).interactive(), use_container_width=True)
 
-# --- MENU TEST CLINICI (Sostituisce le Tabs per non perdere la selezione) ---
+# --- MENU TEST CLINICI ---
 st.markdown("---")
 st.subheader(t["clinical"])
 
-# Stile navigazione Orizzontale al posto delle Tabs
 opzioni_test = [f"🌬️ {t['respiro']}", f"😤 {t['valsalva']}", f"🧍 {t['tilt']}"]
 scelta_test = st.radio("Seleziona Test", opzioni_test, horizontal=True, label_visibility="collapsed")
 
 def render_test_ui(name):
     cs, ce = st.columns(2)
-    # Pulsanti fulminei con callback
     cs.button(t["start_test"], key=f"s_{name}", disabled=not st.session_state.running, on_click=cb_start_test, args=(name,))
     ce.button(t["stop_test"], key=f"e_{name}", disabled=st.session_state.active_test != name, on_click=cb_stop_test, args=(name,))
 
@@ -450,20 +460,19 @@ def render_test_ui(name):
     if res == "error": 
         st.warning(t["wait"])
     elif isinstance(res, dict):
-        st.success("Test OK")
+        st.success("Test OK (Calcolato su intervalli RR grezzi)")
         if 'max' in res:
             rc = st.columns(4)
             rc[0].metric(t["fc_max"], f"{res['max']:.0f}")
             rc[1].metric(t["fc_min"], f"{res['min']:.0f}")
             rc[2].metric(t["fc_diff"], f"{res['diff']:.0f}")
-            rc[3].metric("Ratio", f"{res['ratio']:.2f}")
+            rc[3].metric("Ratio (Max/Min)", f"{res['ratio']:.2f}")
         else:
             rc = st.columns(3)
-            rc[0].metric("15s", f"{res['v15']:.0f}")
-            rc[1].metric("30s", f"{res['v30']:.0f}")
-            rc[2].metric("30:15", f"{res['ratio']:.2f}")
+            rc[0].metric("FC equivalente a ~15s", f"{res['v15']:.0f} BPM")
+            rc[1].metric("FC equivalente a ~30s", f"{res['v30']:.0f} BPM")
+            rc[2].metric("Ratio 30:15", f"{res['ratio']:.2f}")
 
-# Renderizza solo l'UI del test selezionato dal radio button
 if scelta_test == opzioni_test[0]: render_test_ui("res")
 elif scelta_test == opzioni_test[1]: render_test_ui("val")
 else: render_test_ui("tilt")
