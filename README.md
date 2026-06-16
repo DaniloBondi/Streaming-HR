@@ -1,5 +1,3 @@
-[🇬🇧 English version available here](README(Eng).md)
-
 # 📊 Monitoraggio HR e HRV per scopi didattici 💓
 
 ![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)
@@ -11,7 +9,7 @@ Questa applicazione web consente il monitoraggio in tempo reale della **Frequenz
 
 ## 🚀 Funzionalità principali
 
-- **Streaming in tempo reale**: Connessione diretta con l'API di Pulsoid per dati HR ad alta frequenza
+- **Streaming in tempo reale**: Connessione diretta con l'API del provider per dati HR ad alta frequenza
 - **Analisi HRV esemplificativa**: 
   - Calcolo della metrica **RMSSD** (Root Mean Square of Successive Differences).
   - Finestra mobile di **30 secondi** per il monitoraggio live.
@@ -44,9 +42,9 @@ L'app è sviluppata in **Python** e richiede le seguenti librerie (incluse in `r
 
 ## 📖 Come iniziare
 
-1. **Configurazione Pulsoid**:
-   - Assicurati che il tuo sensore sia collegato correttamente tramite Bluetooth all'app Pulsoid sullo smartphone
-   - Ottieni il tuo **Access Token** dal sito [Pulsoid.net](https://pulsoid.net).
+1. **Configurazione API / Token**:
+   - Assicurati che il tuo sensore sia collegato correttamente tramite Bluetooth all'app smartphone che usi per acquisire i dati
+   - Ottieni il tuo **Access Token** dall'app o dal servizio che fornisce i dati
 2. **Setup della web App**:
    - Inserisci il token nella barra a sinistra e premi Invio
 3. **Utilizzo**:
@@ -56,7 +54,7 @@ L'app è sviluppata in **Python** e richiede le seguenti librerie (incluse in `r
 
 ---
 
-## 🔐 Impostare il token API (Pulsoid)
+## 🔐 Impostare il token API (provider)
 
 Questa app legge il token in questo ordine di priorità:
 
@@ -82,7 +80,7 @@ Locale:
 
 Copiare il token dall'app smartphone:
 
-- Apri l'app Pulsoid sullo smartphone, copia il token (usa l'opzione "Copy" o condividi tramite canale sicuro).
+- Apri l'app sullo smartphone, copia il token (usa l'opzione "Copy" o condividi tramite canale sicuro).
 - Puoi trasferirlo tramite copia-incolla, QR code (se supportato dall'app), o inviandolo a te stesso via email sicura.
 - Evita di condividere il token in canali non sicuri o pubblici.
 

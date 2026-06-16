@@ -63,11 +63,14 @@ LANGS = {
         "tilt": "Tilt test - active standing test",
         "inspira": "🟢 INSPIRA", "espira": "🔵 ESPIRA",
         "fc_diff": "FCmax - FCmin",
-        "credits": "**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
+        "credits": "**Smartphone app:** Custom App | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Informativa Privacy e Dati",
-        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token non viene archiviato[...]",
-        "token_label": "🔑 Token Pulsoid", "win_label": "Finestra temporale (sec)"
+        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token è utilizzato per ch[...]",
+        "token_label": "🔑 Token (app custom)", "win_label": "Finestra temporale (sec)",
+        "api_label": "🔗 API URL",
+        "auth_label": "Metodo Auth",
+        "custom_header_label": "Nome header custom"
     },
     "🇬🇧 ENG": {
         "title": "📊❤️ Live HR Monitoring",
@@ -80,11 +83,14 @@ LANGS = {
         "tilt": "Tilt test - active standing test",
         "inspira": "🟢 INHALE", "espira": "🔵 EXHALE",
         "fc_diff": "HRmax - HRmin",
-        "credits": "**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
+        "credits": "**Smartphone app:** Custom App | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Privacy Policy",
-        "privacy_text": "No storage: data remains only in RAM.<br>Deletion: browser closing deletes data.<br>Security: token is never stored.",
-        "token_label": "🔑 Pulsoid Token", "win_label": "Time window (sec)"
+        "privacy_text": "No storage: data remains only in RAM.<br>Deletion: browser closing deletes data.<br>Security: the token is used for API calls but is not stored on the server.",
+        "token_label": "🔑 Token (custom app)", "win_label": "Time window (sec)",
+        "api_label": "🔗 API URL",
+        "auth_label": "Auth method",
+        "custom_header_label": "Custom header name"
     }
 }
 
@@ -101,6 +107,10 @@ for key, default in {
 
 # --- FUNZIONI CALLBACK (Rendono i tasti istantanei) ---
 def cb_start_rec():
+    # impedisci start se token o api mancanti
+    if not token or not api_url:
+        st.warning("Token o API URL mancanti.")
+        return
     st.session_state.running, st.session_state.freeze_view = True, False
 
 def cb_stop_rec():
@@ -145,32 +155,50 @@ def get_token():
     return token
 
 # API CALL
-def get_bpm(token=None):
-    # se token non passato prova a recuperarlo
-    if not token:
-        token = get_token()
-    if not token:
-        return None
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+def _try_request(url, headers):
     try:
-        r = requests.get("https://dev.pulsoid.net/api/v1/data/heart_rate/latest", headers=headers, timeout=1)
-        debug_mode = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
-        if debug_mode:
-            logger.debug("Pulsoid GET status_code=%s", r.status_code)
-            try:
-                st.sidebar.markdown(f"**DEBUG**: last API status {r.status_code}")
-                if r.status_code == 401:
-                    st.sidebar.warning("DEBUG: API returned 401 Unauthorized (token mancante/errato).")
-            except Exception:
-                # sidebar may not be available in some contexts — ignore
-                pass
+        r = requests.get(url, headers=headers, timeout=1)
         if r.status_code == 200:
-            return r.json().get('data', {}).get('heart_rate')
+            try:
+                return r.json().get('data', {}).get('heart_rate')
+            except:
+                return None
         else:
             return None
-    except Exception as e:
-        logger.debug("Errore chiamata API: %s", e)
+    except:
         return None
+
+def get_bpm(token, api_url, auth_method="Auto", custom_header_name="X-API-KEY"):
+    if not token or not api_url:
+        return None
+    # Normalizza url (se l'utente fornisce base, supportiamo endpoint completo o base)
+    url = api_url.strip()
+    # Se l'URL è una base (non contiene 'http' o 'data'), assumiamo endpoint standard come prima
+    # (ma manteniamo l'URL così com'è: l'utente può inserire l'endpoint esatto)
+    if auth_method == "Auto":
+        # prova Bearer -> Token -> X-API-Key
+        headers = {"Authorization": f"Bearer {token}"}
+        v = _try_request(url, headers)
+        if v is not None: return v
+        headers = {"Authorization": f"Token {token}"}
+        v = _try_request(url, headers)
+        if v is not None: return v
+        headers = {"X-API-Key": token}
+        v = _try_request(url, headers)
+        if v is not None: return v
+        # ultima prova custom header default
+        headers = {custom_header_name: token}
+        return _try_request(url, headers)
+    else:
+        if auth_method == "Bearer":
+            headers = {"Authorization": f"Bearer {token}"}
+        elif auth_method == "Token":
+            headers = {"Authorization": f"Token {token}"}
+        elif auth_method == "X-API-Key":
+            headers = {"X-API-Key": token}
+        else:
+            headers = {custom_header_name: token}
+        return _try_request(url, headers)
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -179,23 +207,15 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f"### 🕐 {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M:%S')}")
 
-    # Preferisci token da secrets/env, ma permetti override temporaneo tramite input
-    token_from_cfg = get_token()
-    token_input = st.text_input(t["token_label"], type="password", value="", help="Puoi incollare qui il token per sessione. Preferibile impostare via Streamlit Secrets o API_TOKEN env var.")
-    token = token_from_cfg or (token_input if token_input else None)
-
-    if not token:
-        st.error(
-            "Token API non trovato. Impostalo in `.streamlit/secrets.toml` (chiave API_TOKEN) oppure esporta la variabile d'ambiente `API_TOKEN` per esecuzione locale.\n\n"
-            "Per Streamlit Cloud: vai su Settings -> Secrets e aggiungi `API_TOKEN = \"<il-tuo-token>\"`.\n"
-            "Per locale: export API_TOKEN=\"<il-tuo-token>\" (Linux/macOS) o setx API_TOKEN \"<il-tuo-token>\" (Windows)."
-        )
-        # Blocca l'esecuzione per evitare chiamate non-autenticate
-        st.stop()
-
+    token = st.text_input(t["token_label"], type="password")
+    api_url = st.text_input(t["api_label"], value="")
+    auth_method = st.selectbox(t["auth_label"], ["Auto", "Bearer", "Token", "X-API-Key", "Custom header"], index=0)
+    custom_header_name = ""
+    if auth_method == "Custom header":
+        custom_header_name = st.text_input(t["custom_header_label"], value="X-My-App-Token")
+    
     c1, c2 = st.columns(2)
-    # Usa on_click invece dell'if!
-    c1.button(t["start_rec"], type="primary", disabled=not token, on_click=cb_start_rec)
+    c1.button(t["start_rec"], type="primary", disabled=not token or not api_url, on_click=cb_start_rec)
     c2.button(t["stop_rec"], on_click=cb_stop_rec)
 
     win = st.slider(t["win_label"], 10, 300, 60)
@@ -213,8 +233,7 @@ with st.sidebar:
 
 # --- DASHBOARD ---
 st.title(t["title"])
-# recuperiamo batteria BPM usando il token calcolato in sidebar (se presente)
-bpm = get_bpm(token)
+bpm = get_bpm(token, api_url, auth_method, custom_header_name if custom_header_name else "X-My-App-Token")
 curr_ts = datetime.now().strftime("%H:%M:%S")
 
 if bpm and st.session_state.running:
