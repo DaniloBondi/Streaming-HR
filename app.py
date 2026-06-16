@@ -69,7 +69,7 @@ LANGS = {
         "privacy_title": "🛡️ Informativa Privacy e Dati",
         "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token è utilizzato per [...]",
         "token_label": "🔑 Token (app custom)", "win_label": "Finestra temporale (sec)",
-        "api_label": "🔗 API URL",
+        "api_label": "🔗 API URL (lasciare vuoto per default)",
         "auth_label": "Metodo Auth",
         "custom_header_label": "Nome header custom",
         "stream_mode": "Modalità Streaming"
@@ -90,12 +90,15 @@ LANGS = {
         "privacy_title": "🛡️ Privacy Policy",
         "privacy_text": "No storage: data remains only in RAM.<br>Deletion: browser closing deletes data.<br>Security: the token is used for API calls but is not stored on the server.",
         "token_label": "🔑 Token (custom app)", "win_label": "Time window (sec)",
-        "api_label": "🔗 API URL",
+        "api_label": "🔗 API URL (leave empty for default)",
         "auth_label": "Auth method",
         "custom_header_label": "Custom header name",
         "stream_mode": "Streaming Mode"
     }
 }
+
+# --- COSTANTI ---
+DEFAULT_API_URL = "https://www.npoint.io/docs/5d92312f8631a8376f81"
 
 st_autorefresh(interval=500, key="hr_refresher")
 
@@ -111,10 +114,16 @@ for key, default in {
 
 # --- FUNZIONI CALLBACK (Rendono i tasti istantanei) ---
 def cb_start_rec():
-    # impedisci start se token o api mancanti
-    if not token or not api_url:
-        st.warning("Token o API URL mancanti.")
-        return
+    # impedisci start se api mancante (nel caso di streaming, device_ip/token)
+    if st.session_state.use_streaming:
+        if not device_ip or not stream_token:
+            st.warning("Device IP o Streaming Token mancanti.")
+            return
+    else:
+        # Nel caso non-streaming, non richiedere token (sarà None)
+        if not api_url_effective:
+            st.warning("API URL mancante.")
+            return
     st.session_state.running, st.session_state.freeze_view = True, False
 
 def cb_stop_rec():
@@ -206,36 +215,49 @@ def _try_request(url, headers):
     except:
         return None
 
-def get_bpm(token, api_url, auth_method="Auto", custom_header_name="X-API-KEY"):
-    if not token or not api_url:
+def get_bpm(api_url, auth_method="Auto", custom_header_name="X-API-KEY", token=None):
+    """
+    Fetch BPM from API URL without requiring token.
+    Token is optional and only used if auth_method is not 'Auto' or if needed.
+    """
+    if not api_url:
         return None
-    # Normalizza url (se l'utente fornisce base, supportiamo endpoint completo o base)
+    
     url = api_url.strip()
-    # Se l'URL è una base (non contiene 'http' o 'data'), assumiamo endpoint standard come prima
-    # (ma manteniamo l'URL così com'è: l'utente può inserire l'endpoint esatto)
-    if auth_method == "Auto":
-        # prova Bearer -> Token -> X-API-Key
-        headers = {"Authorization": f"Bearer {token}"}
-        v = _try_request(url, headers)
-        if v is not None: return v
-        headers = {"Authorization": f"Token {token}"}
-        v = _try_request(url, headers)
-        if v is not None: return v
-        headers = {"X-API-Key": token}
-        v = _try_request(url, headers)
-        if v is not None: return v
-        # ultima prova custom header default
-        headers = {custom_header_name: token}
-        return _try_request(url, headers)
-    else:
-        if auth_method == "Bearer":
+    
+    # Se non c'è token e auth_method non è 'Auto', ritorna None
+    if not token and auth_method != "Auto":
+        return None
+    
+    # Se token è presente, usalo
+    if token:
+        if auth_method == "Auto":
+            # prova Bearer -> Token -> X-API-Key
             headers = {"Authorization": f"Bearer {token}"}
-        elif auth_method == "Token":
+            v = _try_request(url, headers)
+            if v is not None: return v
             headers = {"Authorization": f"Token {token}"}
-        elif auth_method == "X-API-Key":
+            v = _try_request(url, headers)
+            if v is not None: return v
             headers = {"X-API-Key": token}
-        else:
+            v = _try_request(url, headers)
+            if v is not None: return v
+            # ultima prova custom header default
             headers = {custom_header_name: token}
+            return _try_request(url, headers)
+        else:
+            if auth_method == "Bearer":
+                headers = {"Authorization": f"Bearer {token}"}
+            elif auth_method == "Token":
+                headers = {"Authorization": f"Token {token}"}
+            elif auth_method == "X-API-Key":
+                headers = {"X-API-Key": token}
+            else:
+                headers = {custom_header_name: token}
+            return _try_request(url, headers)
+    else:
+        # No token: request senza header di autenticazione
+        headers = {}
         return _try_request(url, headers)
 
 # --- SIDEBAR ---
@@ -254,22 +276,40 @@ with st.sidebar:
         device_port = st.number_input("Server Port", value=8080, step=1)
         stream_token = st.text_input("Streamer Security Token", type="password", value="VITAL-66A51AC5")
         poll_interval = st.slider("Sampling Interval (sec)", 0.2, 5.0, 1.0, 0.1)
-        token = None  # Use streaming instead
+        token = None
         api_url = None
+        api_url_effective = None
+        custom_header_name = ""
     else:
         st.markdown("### 🔧 API Settings")
-        token = st.text_input(t["token_label"], type="password")
-        api_url = st.text_input(t["api_label"], value="")
-        auth_method = st.selectbox(t["auth_label"], ["Auto", "Bearer", "Token", "X-API-Key", "Custom header"], index=0)
-        custom_header_name = ""
-        if auth_method == "Custom header":
-            custom_header_name = st.text_input(t["custom_header_label"], value="X-My-App-Token")
+        # L'utente può inserire un URL personalizzato, altrimenti usa il default
+        api_url_custom = st.text_input(t["api_label"], value="").strip()
+        api_url_effective = api_url_custom if api_url_custom else DEFAULT_API_URL
+        
+        # Token opzionale
+        token = st.text_input(t["token_label"], type="password", value="")
+        token = token.strip() if token else None
+        
+        # Auth method solo se token fornito
+        if token:
+            auth_method = st.selectbox(t["auth_label"], ["Auto", "Bearer", "Token", "X-API-Key", "Custom header"], index=0)
+            custom_header_name = ""
+            if auth_method == "Custom header":
+                custom_header_name = st.text_input(t["custom_header_label"], value="X-My-App-Token")
+        else:
+            auth_method = "Auto"
+            custom_header_name = ""
+        
+        api_url = api_url_custom  # Usa custom solo se fornito esplicitamente
+        device_ip = None
+        device_port = None
+        stream_token = None
     
     c1, c2 = st.columns(2)
     if st.session_state.use_streaming:
         c1.button(t["start_rec"], type="primary", disabled=not device_ip or not stream_token, on_click=cb_start_rec)
     else:
-        c1.button(t["start_rec"], type="primary", disabled=not token or not api_url, on_click=cb_start_rec)
+        c1.button(t["start_rec"], type="primary", disabled=not api_url_effective, on_click=cb_start_rec)
     c2.button(t["stop_rec"], on_click=cb_stop_rec)
 
     win = st.slider(t["win_label"], 10, 300, 60)
@@ -300,7 +340,11 @@ if st.session_state.use_streaming and st.session_state.running:
         if payload and bpm and bpm > 0:
             update_rolling_dataframe_streaming(payload)
 else:
-    bpm = get_bpm(token, api_url, auth_method if not st.session_state.use_streaming else "Auto", custom_header_name if not st.session_state.use_streaming else "X-My-App-Token")
+    # Non-streaming: usa api_url_effective (default o custom)
+    bpm = get_bpm(api_url_effective if not st.session_state.use_streaming else None, 
+                   auth_method if not st.session_state.use_streaming else "Auto", 
+                   custom_header_name if not st.session_state.use_streaming else "", 
+                   token if not st.session_state.use_streaming else None)
 
 curr_ts = datetime.now().strftime("%H:%M:%S")
 
