@@ -58,11 +58,14 @@ LANGS = {
         "tilt": "Tilt test - active standing test",
         "inspira": "🟢 INSPIRA", "espira": "🔵 ESPIRA",
         "fc_diff": "FCmax - FCmin",
-        "credits": "**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
+        "credits": "**Smartphone app:** Custom App | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Informativa Privacy e Dati",
-        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token non viene archiviato.",
-        "token_label": "🔑 Token Pulsoid", "win_label": "Finestra temporale (sec)"
+        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token è utilizzato per ch[...]",
+        "token_label": "🔑 Token (app custom)", "win_label": "Finestra temporale (sec)",
+        "api_label": "🔗 API URL",
+        "auth_label": "Metodo Auth",
+        "custom_header_label": "Nome header custom"
     },
     "🇬🇧 ENG": {
         "title": "📊❤️ Live HR Monitoring",
@@ -75,11 +78,14 @@ LANGS = {
         "tilt": "Tilt test - active standing test",
         "inspira": "🟢 INHALE", "espira": "🔵 EXHALE",
         "fc_diff": "HRmax - HRmin",
-        "credits": "**Smartphone app:** Pulsoid | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
+        "credits": "**Smartphone app:** Custom App | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Privacy Policy",
-        "privacy_text": "No storage: data remains only in RAM.<br>Deletion: browser closing deletes data.<br>Security: token is never stored.",
-        "token_label": "🔑 Pulsoid Token", "win_label": "Time window (sec)"
+        "privacy_text": "No storage: data remains only in RAM.<br>Deletion: browser closing deletes data.<br>Security: the token is used for API calls but is not stored on the server.",
+        "token_label": "🔑 Token (custom app)", "win_label": "Time window (sec)",
+        "api_label": "🔗 API URL",
+        "auth_label": "Auth method",
+        "custom_header_label": "Custom header name"
     }
 }
 
@@ -96,6 +102,10 @@ for key, default in {
 
 # --- FUNZIONI CALLBACK (Rendono i tasti istantanei) ---
 def cb_start_rec():
+    # impedisci start se token o api mancanti
+    if not token or not api_url:
+        st.warning("Token o API URL mancanti.")
+        return
     st.session_state.running, st.session_state.freeze_view = True, False
 
 def cb_stop_rec():
@@ -129,12 +139,50 @@ def cb_stop_test(name):
     st.session_state.active_test = None
 
 # API CALL
-def get_bpm(token):
-    if not token: return None
+def _try_request(url, headers):
     try:
-        r = requests.get("https://dev.pulsoid.net/api/v1/data/heart_rate/latest", headers={"Authorization": f"Bearer {token}"}, timeout=1)
-        return r.json().get('data', {}).get('heart_rate') if r.status_code == 200 else None
-    except: return None
+        r = requests.get(url, headers=headers, timeout=1)
+        if r.status_code == 200:
+            try:
+                return r.json().get('data', {}).get('heart_rate')
+            except:
+                return None
+        else:
+            return None
+    except:
+        return None
+
+def get_bpm(token, api_url, auth_method="Auto", custom_header_name="X-API-KEY"):
+    if not token or not api_url:
+        return None
+    # Normalizza url (se l'utente fornisce base, supportiamo endpoint completo o base)
+    url = api_url.strip()
+    # Se l'URL è una base (non contiene 'http' o 'data'), assumiamo endpoint standard come prima
+    # (ma manteniamo l'URL così com'è: l'utente può inserire l'endpoint esatto)
+    if auth_method == "Auto":
+        # prova Bearer -> Token -> X-API-Key
+        headers = {"Authorization": f"Bearer {token}"}
+        v = _try_request(url, headers)
+        if v is not None: return v
+        headers = {"Authorization": f"Token {token}"}
+        v = _try_request(url, headers)
+        if v is not None: return v
+        headers = {"X-API-Key": token}
+        v = _try_request(url, headers)
+        if v is not None: return v
+        # ultima prova custom header default
+        headers = {custom_header_name: token}
+        return _try_request(url, headers)
+    else:
+        if auth_method == "Bearer":
+            headers = {"Authorization": f"Bearer {token}"}
+        elif auth_method == "Token":
+            headers = {"Authorization": f"Token {token}"}
+        elif auth_method == "X-API-Key":
+            headers = {"X-API-Key": token}
+        else:
+            headers = {custom_header_name: token}
+        return _try_request(url, headers)
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -144,10 +192,14 @@ with st.sidebar:
     st.markdown(f"### 🕐 {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M:%S')}")
 
     token = st.text_input(t["token_label"], type="password")
+    api_url = st.text_input(t["api_label"], value="")
+    auth_method = st.selectbox(t["auth_label"], ["Auto", "Bearer", "Token", "X-API-Key", "Custom header"], index=0)
+    custom_header_name = ""
+    if auth_method == "Custom header":
+        custom_header_name = st.text_input(t["custom_header_label"], value="X-My-App-Token")
     
     c1, c2 = st.columns(2)
-    # Usa on_click invece dell'if!
-    c1.button(t["start_rec"], type="primary", disabled=not token, on_click=cb_start_rec)
+    c1.button(t["start_rec"], type="primary", disabled=not token or not api_url, on_click=cb_start_rec)
     c2.button(t["stop_rec"], on_click=cb_stop_rec)
 
     win = st.slider(t["win_label"], 10, 300, 60)
@@ -165,7 +217,7 @@ with st.sidebar:
 
 # --- DASHBOARD ---
 st.title(t["title"])
-bpm = get_bpm(token)
+bpm = get_bpm(token, api_url, auth_method, custom_header_name if custom_header_name else "X-My-App-Token")
 curr_ts = datetime.now().strftime("%H:%M:%S")
 
 if bpm and st.session_state.running:
