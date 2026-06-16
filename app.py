@@ -312,9 +312,6 @@ with st.sidebar:
         api_url_custom = st.text_input(t["api_label"], value="").strip()
         api_url_effective = api_url_custom if api_url_custom else DEFAULT_API_URL
         
-        # Mostra URL attivo
-        st.caption(f"📍 URL attivo: `{api_url_effective}`")
-        
         # Token opzionale
         token = st.text_input(t["token_label"], type="password", value="")
         token = token.strip() if token else None
