@@ -1,17 +1,15 @@
-[🇬🇧 English version available here](README(Eng).md)
-
 # 📊 Monitoraggio HR e HRV per scopi didattici 💓
 
 ![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)
 ![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)
 
-Questa applicazione web consente il monitoraggio in tempo reale della **Frequenza cardiaca (HR)** e della **Variabilità della frequenza cardiaca (HRV)** utilizzando i dati provenienti da sensori **Moofit** tramite l'ecosistema **Pulsoid** e web app customizzata **Streamlit** 
+Questa applicazione web consente il monitoraggio in tempo reale della **Frequenza cardiaca (HR)** e della **Variabilità della frequenza cardiaca (HRV)** utilizzando i dati provenienti da sensori *[...]
 
 ---
 
 ## 🚀 Funzionalità principali
 
-- **Streaming in tempo reale**: Connessione diretta con l'API di Pulsoid per dati HR ad alta frequenza
+- **Streaming in tempo reale**: Connessione diretta con l'API del provider per dati HR ad alta frequenza
 - **Analisi HRV esemplificativa**: 
   - Calcolo della metrica **RMSSD** (Root Mean Square of Successive Differences).
   - Finestra mobile di **30 secondi** per il monitoraggio live.
@@ -44,9 +42,9 @@ L'app è sviluppata in **Python** e richiede le seguenti librerie (incluse in `r
 
 ## 📖 Come iniziare
 
-1. **Configurazione Pulsoid**:
-   - Assicurati che il tuo sensore sia collegato correttamente tramite Bluetooth all'app Pulsoid sullo smartphone
-   - Ottieni il tuo **Access Token** dal sito [Pulsoid.net](https://pulsoid.net).
+1. **Configurazione API / Token**:
+   - Assicurati che il tuo sensore sia collegato correttamente tramite Bluetooth all'app smartphone che usi per acquisire i dati
+   - Ottieni il tuo **Access Token** dall'app o dal servizio che fornisce i dati
 2. **Setup della web App**:
    - Inserisci il token nella barra a sinistra e premi Invio
 3. **Utilizzo**:
@@ -56,9 +54,46 @@ L'app è sviluppata in **Python** e richiede le seguenti librerie (incluse in `r
 
 ---
 
+## 🔐 Impostare il token API (provider)
+
+Questa app legge il token in questo ordine di priorità:
+
+1. Streamlit Secrets: `st.secrets['API_TOKEN']` (es. su Streamlit Cloud o file `.streamlit/secrets.toml`)
+2. Variabile d'ambiente `API_TOKEN` per esecuzione locale
+3. Campo di input nella sidebar (per override temporaneo della sessione)
+
+Esempio: creare `.streamlit/secrets.toml` con questo contenuto (NON committare token reali):
+
+````toml
+API_TOKEN = "metti-il-tuo-token-qui"
+````
+
+Streamlit Cloud:
+
+- Vai al tuo deploy su Streamlit Cloud → Settings → Secrets.
+- Aggiungi una chiave `API_TOKEN` con il valore del token.
+
+Locale:
+
+- Linux/macOS: `export API_TOKEN="il_tuo_token"`
+- Windows (PowerShell): `$env:API_TOKEN = "il_tuo_token"`
+
+Copiare il token dall'app smartphone:
+
+- Apri l'app sullo smartphone, copia il token (usa l'opzione "Copy" o condividi tramite canale sicuro).
+- Puoi trasferirlo tramite copia-incolla, QR code (se supportato dall'app), o inviandolo a te stesso via email sicura.
+- Evita di condividere il token in canali non sicuri o pubblici.
+
+Debug:
+
+- Per abilitare informazioni di debug leggere le chiamate API impostare la variabile d'ambiente `DEBUG=true` (mostrerà solo informazioni diagnostiche nell'interfaccia, non il valore del token).
+
+---
+
 ## 🔬 Alert
 
 ### Validità dei dati
+
 Sia il sensore che la metodica di acquisizione dati non permettono di utilizzare questi valori per scopi clinici o di ricerca; la web app è stat creata per soli scopi didattici!
 
 ---

@@ -61,7 +61,7 @@ LANGS = {
         "credits": "**Smartphone app:** Custom App | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Informativa Privacy e Dati",
-        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token è utilizzato per chiamare l'API ma non viene archiviato nel server.",
+        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token è utilizzato per ch[...]",
         "token_label": "🔑 Token (app custom)", "win_label": "Finestra temporale (sec)",
         "api_label": "🔗 API URL",
         "auth_label": "Metodo Auth",
@@ -192,7 +192,7 @@ with st.sidebar:
     st.markdown(f"### 🕐 {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M:%S')}")
 
     token = st.text_input(t["token_label"], type="password")
-    api_url = st.text_input(t["api_label"], value="https://dev.pulsoid.net/api/v1/data/heart_rate/latest")
+    api_url = st.text_input(t["api_label"], value="")
     auth_method = st.selectbox(t["auth_label"], ["Auto", "Bearer", "Token", "X-API-Key", "Custom header"], index=0)
     custom_header_name = ""
     if auth_method == "Custom header":

@@ -3,13 +3,13 @@
 ![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)
 ![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)
 
-This web application enables real-time monitoring of **Heart Rate (HR)** and **Heart Rate Variability (HRV)** using data from **Moofit** sensors via the **Pulsoid** ecosystem and a customized **Streamlit** web app.
+This web application enables real-time monitoring of **Heart Rate (HR)** and **Heart Rate Variability (HRV)** using data from sensors and a customizable backend service.
 
 ---
 
 ## 🚀 Key Features
 
-- **Real-time Streaming**: Direct connection to the Pulsoid API for high-frequency HR data.
+- **Real-time Streaming**: Connection to a backend API for high-frequency HR data
 - **Exemplary HRV Analysis**: 
   - Calculation of the **RMSSD** metric (Root Mean Square of Successive Differences).
   - **30-second sliding window** for live monitoring.
@@ -38,7 +38,7 @@ The app is developed in **Python** and requires the following libraries:
 
 ## 📖 Getting Started
 
-1. **Pulsoid Configuration**: Ensure your sensor is correctly linked via bluetooth to the Pulsoid app and obtain your **Access Token** from the website [Pulsoid.net](https://pulsoid.net).
+1. **API / Token Configuration**: Ensure your sensor is correctly linked via Bluetooth to the smartphone app you use for data acquisition and obtain your **Access Token** from that app or service.
 2. **App Setup**: Insert the token in the field on the left and press Enter
 3. **Usage**: Click **START** to record. Live RMSSD appears after 30s. Click **STOP** to summarize and download.
 
@@ -47,6 +47,7 @@ The app is developed in **Python** and requires the following libraries:
 ## 🔬 Disclaimer
 
 ### Data Validity
+
 Neither the sensor nor the data acquisition method allow these values to be used for clinical or research purposes. This web app was created for **educational purposes only**!
 
 ---
