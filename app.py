@@ -47,6 +47,7 @@ st.markdown("""
         font-size: 0.8rem;
         color: #555;
     }
+    /* Stile per far sembrare il radio button più simile a un menu di tab */
     div.row-widget.stRadio > div { flex-direction: row; justify-content: flex-start; gap: 20px; }
 </style>
 """, unsafe_allow_html=True)
@@ -117,7 +118,9 @@ LANGS = {
 DEFAULT_API_URL = "https://api.npoint.io/5d92312f8631a8376f81"
 
 # --- DETECT STREAMING MODE FOR ADAPTIVE AUTOREFRESH ---
+# True/False is handled cleanly by session_state.
 is_streaming = st.session_state.get('use_streaming', False)
+# Direct network stream: faster local poll (500ms). Web storage/npoint: slower poll (2000ms) to avoid lagging the UI thread.
 refresh_rate = 500 if is_streaming else 2000
 st_autorefresh(interval=refresh_rate, key="hr_refresher")
 
@@ -129,27 +132,32 @@ for key, default in {
     'markers': [], 'results': {}, 'last_ts': None,
     'use_streaming': False, 'stream_error': None,
     'last_fetch_time': 0, 'last_bpm': None,
-    'rr_history': [],          
-    'test_rr_history': [],     
-    'rec_start_time': None,    
-    'test_start_time': None,   
-    'last_valid_packet_time': 0, 
-    'rr_time_accumulated': 0.0, 
-    'test_rr_time_accumulated': 0.0,
-    'last_raw_payload': None,   
+    'rr_history': [],          # Registro lineare globale degli intervalli RR
+    'test_rr_history': [],     # Registro degli intervalli RR per il test attivo
+    'rec_start_time': None,    # Timestamp inizio registrazione globale
+    'test_start_time': None,   # Timestamp inizio test specifico
+    'last_valid_packet_time': 0, # Ultima volta in cui abbiamo ricevuto un pacchetto NUOVO
+    'rr_time_accumulated': 0.0, # Cronometro ad alta precisione basato sulla somma dei millisecondi RR globali
+    'test_rr_time_accumulated': 0.0, # Cronometro ad alta precisione del test basato sui millisecondi RR
+    'last_raw_payload': None,   # Per debug visivo comodo
     'packet_counter': 0
 }.items():
     if key not in st.session_state: st.session_state[key] = default
 
 # --- FUNZIONI UTILI DI CALCOLO RR ---
 def calcola_metriche_rr(rr_list):
+    """Calcola parametri statistici e RMSSD partendo da una lista di intervalli RR in ms"""
     if not rr_list or len(rr_list) == 0:
         return {"max": 0, "min": 0, "mean": 0, "rmssd": 0}
+    
+    # Conversione intervalli RR (ms) in valori di Frequenza Cardiaca istantanea (BPM)
     bpms = [60000.0 / rr for rr in rr_list if rr > 0]
+    
     rmssd = 0.0
     if len(rr_list) > 1:
         diffs = np.diff(rr_list)
         rmssd = np.sqrt(np.mean(diffs ** 2))
+        
     return {
         "max": max(bpms) if bpms else 0,
         "min": min(bpms) if bpms else 0,
@@ -202,6 +210,7 @@ def cb_start_test(name):
     st.session_state.test_rr_history = []
     st.session_state.test_rr_time_accumulated = 0.0
     
+    # Il marker verticale sul grafico si ancora al tempo reale cumulativo degli RR
     marker_sec = st.session_state.rr_time_accumulated
     st.session_state.markers.append(marker_sec)
     st.session_state.test_start_time = time.time()
@@ -228,6 +237,7 @@ def cb_stop_test(name):
                     'ratio': t_max / t_min if t_min > 0 else 1.0
                 }
         else:
+            # Active Standing tilt test
             cum_times = np.cumsum(st.session_state.test_rr_history)
             if len(cum_times) == 0:
                 st.session_state.results[name] = "error_no_data"
@@ -263,6 +273,7 @@ def fetch_vitals_data_streaming(device_ip, device_port, stream_token, timeout=1.
     except Exception as ex:
         return None, f"⚠️ Error: {str(ex)}"
 
+# API CALL
 def _try_request(url, headers):
     try:
         r = requests.get(url, headers=headers, timeout=1.5)
@@ -337,6 +348,7 @@ with st.sidebar:
     win = st.slider(t["win_label"], 10, 300, 60)
     st.button("🗑 Reset", use_container_width=True, on_click=cb_reset)
 
+    # --- METRICHE SIDEBAR ---
     st.markdown("---")
     st.markdown(f"### {t['stats_rr']}")
     metrics_globali = calcola_metriche_rr(st.session_state.rr_history)
@@ -360,7 +372,7 @@ with st.sidebar:
 # --- DASHBOARD PRINCIPALE ---
 st.title(t["title"])
 
-# --- DATA POLLING LOOP ---
+# --- CONTINUOUS DATA POLLING & GAPS MANAGEMENT ---
 if st.session_state.running:
     current_time = time.time()
     if current_time - st.session_state.last_fetch_time >= poll_interval:
@@ -381,10 +393,15 @@ if st.session_state.running:
             bpm = payload.get("heart_rate") or payload.get("bpm")
             rr_intervals = payload.get("rr_intervals", [])
             
+            # ACCUMULATION POLICY:
+            # 1. MILLISECOND TIMESTAMPS: Compare full precision epoch values.
+            # 2. LOCAL STREAMING IS CLEAR-ON-READ: So if rr_intervals list is present, they are ALWAYS new additions.
             is_new_packet = (st.session_state.last_ts is None) or (st.session_state.last_ts != ts)
             should_update_vitals = is_new_packet or (st.session_state.use_streaming and len(rr_intervals) > 0)
             
             if not should_update_vitals:
+                # SE IL TIMESTAMP NON CAMBIA = nessun nuovo pacchetto ricevuto dal telefono (per npoint)
+                # Se lo streaming è interrotto da più di 15 secondi reali, inseriamo un marker di interruzione (NaN)
                 if time.time() - st.session_state.last_valid_packet_time > 15:
                     if not st.session_state.history.empty and pd.notna(st.session_state.history.iloc[-1]['BPM']):
                         gap_sec = st.session_state.rr_time_accumulated + (time.time() - st.session_state.last_valid_packet_time)
@@ -392,17 +409,20 @@ if st.session_state.running:
                         st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
                     st.session_state.last_bpm = None
             else:
+                # NUOVO PACCHETTO O NUOVI DATI VALIDI ARRIVATI!
                 st.session_state.last_ts = ts
                 st.session_state.last_valid_packet_time = time.time()
                 st.session_state.packet_counter += 1
                 
+                # SE SONO PRESENTI GLI INTERVALLI RR GREZZI: Smontiamo l'array e generiamo i punti del grafico a massima precisione
                 if rr_intervals:
                     new_rows = []
                     new_test_rows = []
                     for rr in rr_intervals:
                         if rr > 0:
+                            # Avanzamento esatto basato sulla durata del battito (ms / 1000)
                             st.session_state.rr_time_accumulated += rr / 1000.0
-                            beat_bpm = 60000.0 / rr  
+                            beat_bpm = 60000.0 / rr  # Conversione millisecondi -> BPM istantanei
                             
                             new_rows.append({'Sec': st.session_state.rr_time_accumulated, 'BPM': beat_bpm})
                             st.session_state.rr_history.append(rr)
@@ -418,11 +438,12 @@ if st.session_state.running:
                                 
                     if new_rows:
                         st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame(new_rows)], ignore_index=True)
-                        st.session_state.last_bpm = new_rows[-1]['BPM']  
+                        st.session_state.last_bpm = new_rows[-1]['BPM']  # Mostra l'ultimo battito reale calcolato
                         
                     if new_test_rows and st.session_state.active_test:
                         st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame(new_test_rows)], ignore_index=True)
                 else:
+                    # Fallback nel caso in cui l'endpoint non fornisca l'array RR ma solo il BPM standard
                     if bpm:
                         st.session_state.last_bpm = bpm
                         sec_now = int(time.time() - st.session_state.rec_start_time) if st.session_state.rec_start_time else 0
@@ -433,6 +454,7 @@ if st.session_state.running:
                             t_elapsed = int(time.time() - st.session_state.test_start_time)
                             st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': t_elapsed, 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
         else:
+            # Richiesta HTTP fallita totalmente (Disconnessione rete)
             if time.time() - st.session_state.last_valid_packet_time > 15:
                 if not st.session_state.history.empty and pd.notna(st.session_state.history.iloc[-1]['BPM']):
                     gap_sec = st.session_state.rr_time_accumulated + (time.time() - st.session_state.last_valid_packet_time)
@@ -456,7 +478,7 @@ if st.session_state.active_test and st.session_state.test_start_time:
     else:
         st.markdown(f"<div class='timer-box'>⏱️ TEST: {elapsed}s</div>", unsafe_allow_html=True)
 
-# --- METRICHE VISIVE ---
+# --- VISUALIZZAZIONE METRICHE SUL PANNELLO ---
 m1, m2, m3, m4, m5 = st.columns(5)
 hist = st.session_state.history
 
@@ -485,7 +507,7 @@ else:
     m1.metric(t["fc_live"], "--")
     m2.info("Avvia START REC")
 
-# --- GRAFICO ---
+# --- GRAFICO TEMPORALE ---
 if not hist.empty:
     if st.session_state.freeze_view and not st.session_state.test_data.empty:
         df_plot = hist[(hist['Sec'] >= st.session_state.test_data['G_Sec'].min()-2) & (hist['Sec'] <= st.session_state.test_data['G_Sec'].max()+2)]
@@ -498,10 +520,12 @@ if not hist.empty:
     y_max = float(valid_plot_bpms.max() + 5) if not valid_plot_bpms.empty else 100.0
 
     if grafico_veloce:
+        # GRAFICO VELOCE NATIVO: Ultra-fluido, non salta o fa flickering durante autorefresh
         st.subheader("⚡ Vital Sign Flow Graph")
         chart_df = df_plot.rename(columns={"Sec": "Secondi", "BPM": "BPM"}).set_index("Secondi")
         st.line_chart(chart_df["BPM"], y_label="BPM", height=300)
     else:
+        # ALTAIR CHART: Con indicatori marker verticali per i test clinici
         line = alt.Chart(df_plot).mark_line(color='#ff4b4b', interpolate='monotone', size=3).encode(
             x=alt.X('Sec:Q', title="Secondi", scale=alt.Scale(nice=False)),
             y=alt.Y('BPM:Q', title="BPM", scale=alt.Scale(domain=[y_min, y_max]))
@@ -559,6 +583,6 @@ def render_test_ui(name):
             rc[1].metric("FC equivalente a ~30s", f"{res['v30']:.0f} BPM")
             rc[2].metric("Ratio 30:15", f"{res['ratio']:.2f}")
 
-if In_Breathing_Tab := (scelta_test == opzioni_test[0]): render_test_ui("res")
-elif In_Valsalva_Tab := (scelta_test == opzioni_test[1]): render_test_ui("val")
+if scelta_test == opzioni_test[0]: render_test_ui("res")
+elif scelta_test == opzioni_test[1]: render_test_ui("val")
 else: render_test_ui("tilt")
