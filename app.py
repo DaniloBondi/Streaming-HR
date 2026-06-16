@@ -7,6 +7,7 @@ import pytz
 import altair as alt
 import os
 import logging
+import time
 
 # configure logging
 logging.basicConfig(level=logging.INFO)
@@ -66,11 +67,12 @@ LANGS = {
         "credits": "**Smartphone app:** Custom App | **Repository:** GitHub | **Web app:** Streamlit | **AI:** Gemini",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Informativa Privacy e Dati",
-        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token è utilizzato per ch[...]",
+        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza: il token è utilizzato per [...]",
         "token_label": "🔑 Token (app custom)", "win_label": "Finestra temporale (sec)",
         "api_label": "🔗 API URL",
         "auth_label": "Metodo Auth",
-        "custom_header_label": "Nome header custom"
+        "custom_header_label": "Nome header custom",
+        "stream_mode": "Modalità Streaming"
     },
     "🇬🇧 ENG": {
         "title": "📊❤️ Live HR Monitoring",
@@ -90,7 +92,8 @@ LANGS = {
         "token_label": "🔑 Token (custom app)", "win_label": "Time window (sec)",
         "api_label": "🔗 API URL",
         "auth_label": "Auth method",
-        "custom_header_label": "Custom header name"
+        "custom_header_label": "Custom header name",
+        "stream_mode": "Streaming Mode"
     }
 }
 
@@ -101,7 +104,8 @@ for key, default in {
     'history': pd.DataFrame(columns=['Sec', 'BPM']), 'running': False,
     'active_test': None, 'freeze_view': False,
     'test_data': pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec']),
-    'markers': [], 'results': {}, 'last_ts': ""
+    'markers': [], 'results': {}, 'last_ts': "",
+    'use_streaming': False, 'stream_error': None
 }.items():
     if key not in st.session_state: st.session_state[key] = default
 
@@ -154,7 +158,41 @@ def get_token():
         token = os.getenv("API_TOKEN")
     return token
 
-# API CALL
+# --- STREAMING DATA RETRIEVAL WITH IMPROVED ERROR HANDLING ---
+def fetch_vitals_data_streaming(device_ip, device_port, stream_token, timeout=1.5):
+    """Fetch vital signs from the mobile device endpoint using streaming procedure"""
+    try:
+        endpoint = f"http://{device_ip}:{device_port}/vitals?token={stream_token}"
+        res = requests.get(endpoint, timeout=timeout)
+        if res.status_code == 200:
+            return res.json(), None
+        else:
+            return None, f"⚠️ Status code {res.status_code}"
+    except requests.exceptions.Timeout:
+        return None, "⏱️ Request Timeout: Device not responding"
+    except requests.exceptions.ConnectionError:
+        return None, "🔌 Connection Failed: Check network/IP"
+    except Exception as ex:
+        return None, f"⚠️ Error: {str(ex)}"
+
+def update_rolling_dataframe_streaming(payload):
+    """Update the rolling BPM dataframe with new data from streaming"""
+    bpm = payload.get("bpm", 0)
+    now_str = datetime.now().strftime("%H:%M:%S")
+    
+    if bpm > 0:
+        sec_now = len(st.session_state.history)
+        new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': bpm}])
+        st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True).tail(100)
+    
+    # Sync rolling list from remote cache on startup
+    if len(st.session_state.history) <= 1 and len(payload.get("bpm_history", [])) > 0:
+        remote_pts = []
+        for idx, pt in enumerate(payload["bpm_history"]):
+            remote_pts.append({"Sec": idx, "BPM": pt.get("BPM", pt.get("bpm", 0))})
+        st.session_state.history = pd.DataFrame(remote_pts)
+
+# API CALL (Original method for compatibility)
 def _try_request(url, headers):
     try:
         r = requests.get(url, headers=headers, timeout=1)
@@ -207,15 +245,31 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f"### 🕐 {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M:%S')}")
 
-    token = st.text_input(t["token_label"], type="password")
-    api_url = st.text_input(t["api_label"], value="")
-    auth_method = st.selectbox(t["auth_label"], ["Auto", "Bearer", "Token", "X-API-Key", "Custom header"], index=0)
-    custom_header_name = ""
-    if auth_method == "Custom header":
-        custom_header_name = st.text_input(t["custom_header_label"], value="X-My-App-Token")
+    # --- STREAMING MODE TOGGLE ---
+    st.session_state.use_streaming = st.checkbox(t["stream_mode"], value=False)
+    
+    if st.session_state.use_streaming:
+        st.markdown("### 📱 Streaming Settings")
+        device_ip = st.text_input("Mobile IP Address", value="10.215.78.116")
+        device_port = st.number_input("Server Port", value=8080, step=1)
+        stream_token = st.text_input("Streamer Security Token", type="password", value="VITAL-66A51AC5")
+        poll_interval = st.slider("Sampling Interval (sec)", 0.2, 5.0, 1.0, 0.1)
+        token = None  # Use streaming instead
+        api_url = None
+    else:
+        st.markdown("### 🔧 API Settings")
+        token = st.text_input(t["token_label"], type="password")
+        api_url = st.text_input(t["api_label"], value="")
+        auth_method = st.selectbox(t["auth_label"], ["Auto", "Bearer", "Token", "X-API-Key", "Custom header"], index=0)
+        custom_header_name = ""
+        if auth_method == "Custom header":
+            custom_header_name = st.text_input(t["custom_header_label"], value="X-My-App-Token")
     
     c1, c2 = st.columns(2)
-    c1.button(t["start_rec"], type="primary", disabled=not token or not api_url, on_click=cb_start_rec)
+    if st.session_state.use_streaming:
+        c1.button(t["start_rec"], type="primary", disabled=not device_ip or not stream_token, on_click=cb_start_rec)
+    else:
+        c1.button(t["start_rec"], type="primary", disabled=not token or not api_url, on_click=cb_start_rec)
     c2.button(t["stop_rec"], on_click=cb_stop_rec)
 
     win = st.slider(t["win_label"], 10, 300, 60)
@@ -233,7 +287,21 @@ with st.sidebar:
 
 # --- DASHBOARD ---
 st.title(t["title"])
-bpm = get_bpm(token, api_url, auth_method, custom_header_name if custom_header_name else "X-My-App-Token")
+
+# Get BPM from appropriate source
+if st.session_state.use_streaming and st.session_state.running:
+    payload, error = fetch_vitals_data_streaming(device_ip, device_port, stream_token)
+    if error:
+        st.session_state.stream_error = error
+        bpm = None
+    else:
+        st.session_state.stream_error = None
+        bpm = payload.get("bpm", 0) if payload else None
+        if payload and bpm and bpm > 0:
+            update_rolling_dataframe_streaming(payload)
+else:
+    bpm = get_bpm(token, api_url, auth_method if not st.session_state.use_streaming else "Auto", custom_header_name if not st.session_state.use_streaming else "X-My-App-Token")
+
 curr_ts = datetime.now().strftime("%H:%M:%S")
 
 if bpm and st.session_state.running:
@@ -243,6 +311,10 @@ if bpm and st.session_state.running:
         st.session_state.last_ts = curr_ts
         if st.session_state.active_test:
             st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': len(st.session_state.test_data), 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
+
+# Display streaming error if present
+if st.session_state.stream_error:
+    st.warning(st.session_state.stream_error)
 
 m1, m2, m3, m4 = st.columns(4)
 hist = st.session_state.history
