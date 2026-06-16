@@ -67,7 +67,7 @@ LANGS = {
         "credits": "**Smartphone app:** App personalizzata creata con Google AI Studio e GitHub Copilot | **Repository:** GitHub | **Backend temporaneo:** npoint.io | **Web app:** framework Streamlit",
         "creator": "**Creator:** Danilo Bondi",
         "privacy_title": "🛡️ Informativa Privacy e Dati",
-        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza ulteriore: via token personalizzati",
+        "privacy_text": "Nessun salvataggio: i dati restano solo nella RAM temporanea della sessione.<br>Cancellazione: browser chiuso = dati eliminati.<br>Sicurezza ulteriore: via token personalizzato",
         "token_label": "🔑 Token (app custom)", "win_label": "Finestra temporale (sec)",
         "api_label": "🔗 API URL (lasciare vuoto per default)",
         "auth_label": "Metodo Auth",
@@ -108,7 +108,8 @@ for key, default in {
     'active_test': None, 'freeze_view': False,
     'test_data': pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec']),
     'markers': [], 'results': {}, 'last_ts': "",
-    'use_streaming': False, 'stream_error': None
+    'use_streaming': False, 'stream_error': None,
+    'last_fetch_time': 0
 }.items():
     if key not in st.session_state: st.session_state[key] = default
 
@@ -207,7 +208,10 @@ def _try_request(url, headers):
         r = requests.get(url, headers=headers, timeout=1)
         if r.status_code == 200:
             try:
-                return r.json().get('data', {}).get('heart_rate')
+                data = r.json()
+                # Prova prima con 'heart_rate', poi fallback a 'bpm' per compatibilità
+                bpm_value = data.get('heart_rate') or data.get('bpm')
+                return bpm_value
             except:
                 return None
         else:
@@ -304,6 +308,7 @@ with st.sidebar:
         device_ip = None
         device_port = None
         stream_token = None
+        poll_interval = 1.0
     
     c1, c2 = st.columns(2)
     if st.session_state.use_streaming:
@@ -328,33 +333,42 @@ with st.sidebar:
 # --- DASHBOARD ---
 st.title(t["title"])
 
-# Get BPM from appropriate source
-if st.session_state.use_streaming and st.session_state.running:
-    payload, error = fetch_vitals_data_streaming(device_ip, device_port, stream_token)
-    if error:
-        st.session_state.stream_error = error
-        bpm = None
-    else:
-        st.session_state.stream_error = None
-        bpm = payload.get("bpm", 0) if payload else None
-        if payload and bpm and bpm > 0:
-            update_rolling_dataframe_streaming(payload)
+# --- CONTINUOUS DATA POLLING ---
+# Polling loop che raccoglie dati continuativamente quando running=True
+if st.session_state.running:
+    current_time = time.time()
+    time_since_last_fetch = current_time - st.session_state.last_fetch_time
+    
+    # Fetch solo se è passato abbastanza tempo (basato su poll_interval)
+    if time_since_last_fetch >= poll_interval:
+        if st.session_state.use_streaming:
+            payload, error = fetch_vitals_data_streaming(device_ip, device_port, stream_token)
+            if error:
+                st.session_state.stream_error = error
+                bpm = None
+            else:
+                st.session_state.stream_error = None
+                bpm = payload.get("bpm", 0) if payload else None
+                if payload and bpm and bpm > 0:
+                    update_rolling_dataframe_streaming(payload)
+        else:
+            # Non-streaming: usa api_url_effective (default o custom)
+            bpm = get_bpm(api_url_effective, auth_method, custom_header_name, token)
+            
+            # Aggiungi al history se abbiamo un BPM valido
+            if bpm:
+                sec_now = len(st.session_state.history)
+                new_row = pd.DataFrame([{'Sec': sec_now, 'BPM': bpm}])
+                st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
+                
+                if st.session_state.active_test:
+                    st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': len(st.session_state.test_data), 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
+        
+        st.session_state.last_fetch_time = current_time
+        # Force refresh della pagina
+        st.rerun()
 else:
-    # Non-streaming: usa api_url_effective (default o custom)
-    bpm = get_bpm(api_url_effective if not st.session_state.use_streaming else None, 
-                   auth_method if not st.session_state.use_streaming else "Auto", 
-                   custom_header_name if not st.session_state.use_streaming else "", 
-                   token if not st.session_state.use_streaming else None)
-
-curr_ts = datetime.now().strftime("%H:%M:%S")
-
-if bpm and st.session_state.running:
-    if st.session_state.last_ts != curr_ts:
-        sec_now = len(st.session_state.history)
-        st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame([{'Sec': sec_now, 'BPM': bpm}])], ignore_index=True)
-        st.session_state.last_ts = curr_ts
-        if st.session_state.active_test:
-            st.session_state.test_data = pd.concat([st.session_state.test_data, pd.DataFrame([{'T_Sec': len(st.session_state.test_data), 'BPM': bpm, 'G_Sec': sec_now}])], ignore_index=True)
+    bpm = None
 
 # Display streaming error if present
 if st.session_state.stream_error:
