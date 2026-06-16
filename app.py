@@ -113,7 +113,7 @@ for key, default in {
     'test_data': pd.DataFrame(columns=['T_Sec', 'BPM', 'G_Sec']),
     'markers': [], 'results': {}, 'last_ts': None,
     'use_streaming': False, 'stream_error': None,
-    'last_fetch_time': 0, 'debug_mode': False, 'last_bpm': None,
+    'last_fetch_time': 0, 'last_bpm': None,
     'rr_history': [],          # Registro lineare globale degli intervalli RR
     'test_rr_history': [],     # Registro degli intervalli RR per il test attivo
     'rec_start_time': None,    # Timestamp inizio registrazione globale
@@ -233,29 +233,17 @@ def fetch_vitals_data_streaming(device_ip, device_port, stream_token, timeout=1.
     except Exception as ex:
         return None, f"⚠️ Error: {str(ex)}"
 
-# API CALL
+# API CALL (Senza debug mode)
 def _try_request(url, headers):
     try:
         r = requests.get(url, headers=headers, timeout=1)
-        if st.session_state.debug_mode:
-            logger.info(f"[API] URL: {url} | Status: {r.status_code}")
         if r.status_code == 200:
             try:
-                data = r.json()
-                if st.session_state.debug_mode:
-                    logger.info(f"[API] Response: {data}")
-                return data
-            except Exception as e:
-                if st.session_state.debug_mode:
-                    logger.error(f"[API] JSON parse error: {e}")
+                return r.json()
+            except Exception:
                 return None
-        else:
-            if st.session_state.debug_mode:
-                logger.error(f"[API] Bad status code: {r.status_code}")
-            return None
-    except Exception as e:
-        if st.session_state.debug_mode:
-            logger.error(f"[API] Request failed: {e}")
+        return None
+    except Exception:
         return None
 
 def get_bpm(api_url, auth_method="Auto", custom_header_name="X-API-KEY", token=None):
@@ -287,7 +275,6 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f"### 🕐 {datetime.now(pytz.timezone('Europe/Rome')).strftime('%H:%M:%S')}")
 
-    st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=False)
     st.session_state.use_streaming = st.checkbox(t["stream_mode"], value=False)
     
     if st.session_state.use_streaming:
